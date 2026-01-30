@@ -145,6 +145,7 @@ def main() -> int:
     if rl_cfg is None:
         # Use default config
         from luckylab.rl import SkrlCfg
+
         rl_cfg = SkrlCfg()
         logger.info("Using default RL configuration")
     else:

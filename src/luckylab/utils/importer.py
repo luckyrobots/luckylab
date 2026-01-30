@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import sys
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 
 def import_packages(package_name: str, blacklist_pkgs: list[str] | None = None) -> None:
@@ -31,9 +31,7 @@ def import_packages(package_name: str, blacklist_pkgs: list[str] | None = None) 
     package = importlib.import_module(package_name)
 
     # Import all sub-packages recursively
-    for _ in _walk_packages(
-        package.__path__, package.__name__ + ".", blacklist_pkgs=blacklist_pkgs
-    ):
+    for _ in _walk_packages(package.__path__, package.__name__ + ".", blacklist_pkgs=blacklist_pkgs):
         pass
 
 

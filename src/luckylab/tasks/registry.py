@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, TypeVar
+from collections.abc import Callable
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from ..rl.config import SkrlCfg
@@ -17,7 +18,7 @@ _REGISTRY: dict[str, EnvRlCfgPair] = {}
 def register_task(
     task_id: str,
     env_cfg_class: type | Callable,
-    rl_cfg: "SkrlCfg | None" = None,
+    rl_cfg: SkrlCfg | None = None,
 ) -> None:
     """
     Register a task with its environment configuration class and optional RL config.
@@ -62,7 +63,7 @@ def load_env_cfg(task_id: str) -> object:
     return env_cfg_class
 
 
-def load_rl_cfg(task_id: str) -> "SkrlCfg | None":
+def load_rl_cfg(task_id: str) -> SkrlCfg | None:
     """
     Load the RL training configuration for a task.
 

@@ -1,10 +1,10 @@
 """Tests for LuckyLab utilities."""
 
 import numpy as np
-import pytest
 import torch
 
 from luckylab.utils.buffers import CircularBuffer, DelayBuffer
+from luckylab.utils.iteration_logger import IterationLogger, IterationLoggerCfg
 from luckylab.utils.logging import (
     colorize,
     format_metric,
@@ -13,7 +13,6 @@ from luckylab.utils.logging import (
     print_header,
     print_info,
 )
-from luckylab.utils.iteration_logger import IterationLogger, IterationLoggerCfg
 from luckylab.utils.metrics import MetricsLogger, MetricsLoggerCfg, create_logger
 from luckylab.utils.nan_guard import NanGuard, NanGuardCfg
 from luckylab.utils.random import seed_rng
@@ -160,7 +159,7 @@ class TestCircularBuffer:
     def test_reset_specific_batch(self):
         buf = CircularBuffer(max_len=3, batch_size=3, device="cpu")
 
-        for i in range(3):
+        for _ in range(3):
             buf.append(torch.tensor([[1.0], [2.0], [3.0]]))
 
         buf.reset(batch_ids=[1])
@@ -228,9 +227,7 @@ class TestDelayBuffer:
         # Set seed for reproducibility
         torch.manual_seed(42)
 
-        buf = DelayBuffer(
-            min_lag=0, max_lag=5, batch_size=4, device="cpu", per_env=True
-        )
+        buf = DelayBuffer(min_lag=0, max_lag=5, batch_size=4, device="cpu", per_env=True)
 
         buf.append(torch.randn(4, 10))
         buf.compute()
@@ -242,9 +239,7 @@ class TestDelayBuffer:
     def test_shared_lag(self):
         torch.manual_seed(42)
 
-        buf = DelayBuffer(
-            min_lag=2, max_lag=2, batch_size=4, device="cpu", per_env=False
-        )
+        buf = DelayBuffer(min_lag=2, max_lag=2, batch_size=4, device="cpu", per_env=False)
 
         buf.append(torch.randn(4, 10))
         buf.compute()

@@ -338,7 +338,9 @@ class ManagerBasedRlEnv(gym.Env):
         """Execute one step in the environment."""
         self.step_count += 1
         self.common_step_counter += 1  # Track total steps for curriculum
-        self.last_action = self.current_action.copy() if self.current_action is not None else np.zeros_like(action)
+        self.last_action = (
+            self.current_action.copy() if self.current_action is not None else np.zeros_like(action)
+        )
         self.current_action = action.copy()
 
         # Send control and get observation

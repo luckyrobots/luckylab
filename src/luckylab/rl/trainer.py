@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from .config import SkrlCfg, ActorCriticCfg
+from .config import ActorCriticCfg, SkrlCfg
 
 if TYPE_CHECKING:
-    from ..envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
+    from ..envs import ManagerBasedRlEnvCfg
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +21,14 @@ logger = logging.getLogger(__name__)
 def _get_activation_torch(name: str):
     """Get PyTorch activation by name."""
     import torch.nn as nn
+
     return {"elu": nn.ELU, "relu": nn.ReLU, "tanh": nn.Tanh, "leaky_relu": nn.LeakyReLU}[name.lower()]
 
 
 def _build_mlp_torch(input_dim: int, output_dim: int, hidden_dims: tuple[int, ...], activation: str):
     """Build PyTorch MLP."""
     import torch.nn as nn
+
     act = _get_activation_torch(activation)
     layers = []
     prev = input_dim
@@ -41,13 +43,17 @@ def _create_torch_models(env, cfg: ActorCriticCfg, device: str) -> dict:
     """Create PyTorch models for skrl."""
     import torch
     import torch.nn as nn
-    from skrl.models.torch import Model, GaussianMixin, DeterministicMixin
+    from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 
     class GaussianPolicy(GaussianMixin, Model):
         def __init__(self, observation_space, action_space, device, cfg: ActorCriticCfg):
             Model.__init__(self, observation_space, action_space, device)
-            GaussianMixin.__init__(self, clip_actions=False, clip_log_std=True, min_log_std=-20, max_log_std=2)
-            self.net = _build_mlp_torch(observation_space.shape[0], action_space.shape[0], cfg.actor_hidden_dims, cfg.activation)
+            GaussianMixin.__init__(
+                self, clip_actions=False, clip_log_std=True, min_log_std=-20, max_log_std=2
+            )
+            self.net = _build_mlp_torch(
+                observation_space.shape[0], action_space.shape[0], cfg.actor_hidden_dims, cfg.activation
+            )
             self.log_std = nn.Parameter(torch.full((action_space.shape[0],), cfg.init_noise_std).log())
 
         def compute(self, inputs, role=""):
@@ -57,7 +63,9 @@ def _create_torch_models(env, cfg: ActorCriticCfg, device: str) -> dict:
         def __init__(self, observation_space, action_space, device, cfg: ActorCriticCfg):
             Model.__init__(self, observation_space, action_space, device)
             DeterministicMixin.__init__(self, clip_actions=False)
-            self.net = _build_mlp_torch(observation_space.shape[0], action_space.shape[0], cfg.actor_hidden_dims, cfg.activation)
+            self.net = _build_mlp_torch(
+                observation_space.shape[0], action_space.shape[0], cfg.actor_hidden_dims, cfg.activation
+            )
 
         def compute(self, inputs, role=""):
             return torch.tanh(self.net(inputs["states"])), {}
@@ -98,20 +106,22 @@ def _create_torch_models(env, cfg: ActorCriticCfg, device: str) -> dict:
 def _get_activation_jax(name: str):
     """Get JAX activation by name."""
     import flax.linen as nn
+
     return {"elu": nn.elu, "relu": nn.relu, "tanh": nn.tanh, "leaky_relu": nn.leaky_relu}[name.lower()]
 
 
 def _create_jax_models(env, cfg: ActorCriticCfg, device: str) -> dict:
     """Create JAX models for skrl."""
-    import jax
-    import jax.numpy as jnp
     import flax.linen as nn
-    from skrl.models.jax import Model, GaussianMixin, DeterministicMixin
+    import jax.numpy as jnp
+    from skrl.models.jax import DeterministicMixin, GaussianMixin, Model
 
     class GaussianPolicy(GaussianMixin, Model):
         def __init__(self, observation_space, action_space, device, cfg: ActorCriticCfg, **kwargs):
             Model.__init__(self, observation_space, action_space, device, **kwargs)
-            GaussianMixin.__init__(self, clip_actions=False, clip_log_std=True, min_log_std=-20, max_log_std=2)
+            GaussianMixin.__init__(
+                self, clip_actions=False, clip_log_std=True, min_log_std=-20, max_log_std=2
+            )
             self.cfg = cfg
 
         def setup(self):
@@ -121,7 +131,9 @@ def _create_jax_models(env, cfg: ActorCriticCfg, device: str) -> dict:
                 layers.extend([nn.Dense(dim), act])
             layers.append(nn.Dense(self.num_actions))
             self.net = nn.Sequential(layers)
-            self.log_std = self.param("log_std", nn.initializers.constant(jnp.log(self.cfg.init_noise_std)), (self.num_actions,))
+            self.log_std = self.param(
+                "log_std", nn.initializers.constant(jnp.log(self.cfg.init_noise_std)), (self.num_actions,)
+            )
 
         def __call__(self, inputs, role=""):
             mean = self.net(inputs["states"])
@@ -194,7 +206,6 @@ def _create_jax_models(env, cfg: ActorCriticCfg, device: str) -> dict:
 
 def _build_ppo_torch(env, cfg: SkrlCfg, device: str):
     """Build PyTorch PPO agent."""
-    import torch
     from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
     from skrl.memories.torch import RandomMemory
 
@@ -209,23 +220,31 @@ def _build_ppo_torch(env, cfg: SkrlCfg, device: str):
     memory = RandomMemory(memory_size=cfg.ppo.rollouts, num_envs=env.num_envs, device=device)
 
     agent_cfg = PPO_DEFAULT_CONFIG.copy()
-    agent_cfg.update({
-        "rollouts": cfg.ppo.rollouts,
-        "learning_epochs": cfg.ppo.learning_epochs,
-        "mini_batches": cfg.ppo.mini_batches,
-        "discount_factor": cfg.ppo.discount_factor,
-        "lambda": cfg.ppo.lambda_gae,
-        "learning_rate": cfg.ppo.learning_rate,
-        "ratio_clip": cfg.ppo.ratio_clip,
-        "value_loss_scale": cfg.ppo.value_loss_scale,
-        "entropy_loss_scale": cfg.ppo.entropy_loss_scale,
-        "grad_norm_clip": cfg.ppo.grad_norm_clip,
-        "kl_threshold": cfg.ppo.kl_threshold,
-        "experiment": _experiment_cfg(cfg),
-    })
+    agent_cfg.update(
+        {
+            "rollouts": cfg.ppo.rollouts,
+            "learning_epochs": cfg.ppo.learning_epochs,
+            "mini_batches": cfg.ppo.mini_batches,
+            "discount_factor": cfg.ppo.discount_factor,
+            "lambda": cfg.ppo.lambda_gae,
+            "learning_rate": cfg.ppo.learning_rate,
+            "ratio_clip": cfg.ppo.ratio_clip,
+            "value_loss_scale": cfg.ppo.value_loss_scale,
+            "entropy_loss_scale": cfg.ppo.entropy_loss_scale,
+            "grad_norm_clip": cfg.ppo.grad_norm_clip,
+            "kl_threshold": cfg.ppo.kl_threshold,
+            "experiment": _experiment_cfg(cfg),
+        }
+    )
 
-    return PPO(models=models, memory=memory, cfg=agent_cfg,
-               observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return PPO(
+        models=models,
+        memory=memory,
+        cfg=agent_cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
 
 
 def _build_ppo_jax(env, cfg: SkrlCfg, device: str):
@@ -242,23 +261,31 @@ def _build_ppo_jax(env, cfg: SkrlCfg, device: str):
     memory = RandomMemory(memory_size=cfg.ppo.rollouts, num_envs=env.num_envs, device=device)
 
     agent_cfg = PPO_DEFAULT_CONFIG.copy()
-    agent_cfg.update({
-        "rollouts": cfg.ppo.rollouts,
-        "learning_epochs": cfg.ppo.learning_epochs,
-        "mini_batches": cfg.ppo.mini_batches,
-        "discount_factor": cfg.ppo.discount_factor,
-        "lambda": cfg.ppo.lambda_gae,
-        "learning_rate": cfg.ppo.learning_rate,
-        "ratio_clip": cfg.ppo.ratio_clip,
-        "value_loss_scale": cfg.ppo.value_loss_scale,
-        "entropy_loss_scale": cfg.ppo.entropy_loss_scale,
-        "grad_norm_clip": cfg.ppo.grad_norm_clip,
-        "kl_threshold": cfg.ppo.kl_threshold,
-        "experiment": _experiment_cfg(cfg),
-    })
+    agent_cfg.update(
+        {
+            "rollouts": cfg.ppo.rollouts,
+            "learning_epochs": cfg.ppo.learning_epochs,
+            "mini_batches": cfg.ppo.mini_batches,
+            "discount_factor": cfg.ppo.discount_factor,
+            "lambda": cfg.ppo.lambda_gae,
+            "learning_rate": cfg.ppo.learning_rate,
+            "ratio_clip": cfg.ppo.ratio_clip,
+            "value_loss_scale": cfg.ppo.value_loss_scale,
+            "entropy_loss_scale": cfg.ppo.entropy_loss_scale,
+            "grad_norm_clip": cfg.ppo.grad_norm_clip,
+            "kl_threshold": cfg.ppo.kl_threshold,
+            "experiment": _experiment_cfg(cfg),
+        }
+    )
 
-    return PPO(models=models, memory=memory, cfg=agent_cfg,
-               observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return PPO(
+        models=models,
+        memory=memory,
+        cfg=agent_cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
 
 
 def _build_sac_torch(env, cfg: SkrlCfg, device: str):
@@ -268,11 +295,17 @@ def _build_sac_torch(env, cfg: SkrlCfg, device: str):
 
     models_cls = _create_torch_models(env, cfg.policy, device)
     models = {
-        "policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
+        "policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
         "critic_1": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
         "critic_2": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_critic_1": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_critic_2": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
+        "target_critic_1": models_cls["QNetwork"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
+        "target_critic_2": models_cls["QNetwork"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
     }
     for m in models.values():
         m.to(device)
@@ -281,23 +314,31 @@ def _build_sac_torch(env, cfg: SkrlCfg, device: str):
     memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
     agent_cfg = SAC_DEFAULT_CONFIG.copy()
-    agent_cfg.update({
-        "batch_size": cfg.sac.batch_size,
-        "discount_factor": cfg.sac.discount_factor,
-        "polyak": cfg.sac.polyak,
-        "actor_learning_rate": cfg.sac.actor_learning_rate,
-        "critic_learning_rate": cfg.sac.critic_learning_rate,
-        "learn_entropy": cfg.sac.learn_entropy,
-        "entropy_learning_rate": cfg.sac.actor_learning_rate,
-        "initial_entropy_value": cfg.sac.initial_entropy,
-        "grad_norm_clip": cfg.sac.grad_norm_clip,
-        "experiment": _experiment_cfg(cfg),
-    })
+    agent_cfg.update(
+        {
+            "batch_size": cfg.sac.batch_size,
+            "discount_factor": cfg.sac.discount_factor,
+            "polyak": cfg.sac.polyak,
+            "actor_learning_rate": cfg.sac.actor_learning_rate,
+            "critic_learning_rate": cfg.sac.critic_learning_rate,
+            "learn_entropy": cfg.sac.learn_entropy,
+            "entropy_learning_rate": cfg.sac.actor_learning_rate,
+            "initial_entropy_value": cfg.sac.initial_entropy,
+            "grad_norm_clip": cfg.sac.grad_norm_clip,
+            "experiment": _experiment_cfg(cfg),
+        }
+    )
     if cfg.sac.target_entropy is not None:
         agent_cfg["target_entropy"] = cfg.sac.target_entropy
 
-    return SAC(models=models, memory=memory, cfg=agent_cfg,
-               observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return SAC(
+        models=models,
+        memory=memory,
+        cfg=agent_cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
 
 
 def _build_sac_jax(env, cfg: SkrlCfg, device: str):
@@ -307,34 +348,48 @@ def _build_sac_jax(env, cfg: SkrlCfg, device: str):
 
     models_cls = _create_jax_models(env, cfg.policy, device)
     models = {
-        "policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
+        "policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
         "critic_1": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
         "critic_2": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_critic_1": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_critic_2": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
+        "target_critic_1": models_cls["QNetwork"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
+        "target_critic_2": models_cls["QNetwork"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
     }
 
     memory_size = cfg.memory_size or 100_000
     memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
     agent_cfg = SAC_DEFAULT_CONFIG.copy()
-    agent_cfg.update({
-        "batch_size": cfg.sac.batch_size,
-        "discount_factor": cfg.sac.discount_factor,
-        "polyak": cfg.sac.polyak,
-        "actor_learning_rate": cfg.sac.actor_learning_rate,
-        "critic_learning_rate": cfg.sac.critic_learning_rate,
-        "learn_entropy": cfg.sac.learn_entropy,
-        "entropy_learning_rate": cfg.sac.actor_learning_rate,
-        "initial_entropy_value": cfg.sac.initial_entropy,
-        "grad_norm_clip": cfg.sac.grad_norm_clip,
-        "experiment": _experiment_cfg(cfg),
-    })
+    agent_cfg.update(
+        {
+            "batch_size": cfg.sac.batch_size,
+            "discount_factor": cfg.sac.discount_factor,
+            "polyak": cfg.sac.polyak,
+            "actor_learning_rate": cfg.sac.actor_learning_rate,
+            "critic_learning_rate": cfg.sac.critic_learning_rate,
+            "learn_entropy": cfg.sac.learn_entropy,
+            "entropy_learning_rate": cfg.sac.actor_learning_rate,
+            "initial_entropy_value": cfg.sac.initial_entropy,
+            "grad_norm_clip": cfg.sac.grad_norm_clip,
+            "experiment": _experiment_cfg(cfg),
+        }
+    )
     if cfg.sac.target_entropy is not None:
         agent_cfg["target_entropy"] = cfg.sac.target_entropy
 
-    return SAC(models=models, memory=memory, cfg=agent_cfg,
-               observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return SAC(
+        models=models,
+        memory=memory,
+        cfg=agent_cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
 
 
 def _build_td3_torch(env, cfg: SkrlCfg, device: str):
@@ -344,12 +399,20 @@ def _build_td3_torch(env, cfg: SkrlCfg, device: str):
 
     models_cls = _create_torch_models(env, cfg.policy, device)
     models = {
-        "policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
+        "policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
+        "target_policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
         "critic_1": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
         "critic_2": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_critic_1": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_critic_2": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
+        "target_critic_1": models_cls["QNetwork"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
+        "target_critic_2": models_cls["QNetwork"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
     }
     for m in models.values():
         m.to(device)
@@ -358,20 +421,28 @@ def _build_td3_torch(env, cfg: SkrlCfg, device: str):
     memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
     agent_cfg = TD3_DEFAULT_CONFIG.copy()
-    agent_cfg.update({
-        "batch_size": cfg.td3.batch_size,
-        "discount_factor": cfg.td3.discount_factor,
-        "polyak": cfg.td3.polyak,
-        "actor_learning_rate": cfg.td3.actor_learning_rate,
-        "critic_learning_rate": cfg.td3.critic_learning_rate,
-        "policy_delay": cfg.td3.policy_delay,
-        "smooth_regularization_noise": cfg.td3.smooth_regularization_noise,
-        "smooth_regularization_clip": cfg.td3.smooth_regularization_clip,
-        "experiment": _experiment_cfg(cfg),
-    })
+    agent_cfg.update(
+        {
+            "batch_size": cfg.td3.batch_size,
+            "discount_factor": cfg.td3.discount_factor,
+            "polyak": cfg.td3.polyak,
+            "actor_learning_rate": cfg.td3.actor_learning_rate,
+            "critic_learning_rate": cfg.td3.critic_learning_rate,
+            "policy_delay": cfg.td3.policy_delay,
+            "smooth_regularization_noise": cfg.td3.smooth_regularization_noise,
+            "smooth_regularization_clip": cfg.td3.smooth_regularization_clip,
+            "experiment": _experiment_cfg(cfg),
+        }
+    )
 
-    return TD3(models=models, memory=memory, cfg=agent_cfg,
-               observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return TD3(
+        models=models,
+        memory=memory,
+        cfg=agent_cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
 
 
 def _build_td3_jax(env, cfg: SkrlCfg, device: str):
@@ -381,32 +452,48 @@ def _build_td3_jax(env, cfg: SkrlCfg, device: str):
 
     models_cls = _create_jax_models(env, cfg.policy, device)
     models = {
-        "policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
+        "policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
+        "target_policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
         "critic_1": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
         "critic_2": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_critic_1": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_critic_2": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
+        "target_critic_1": models_cls["QNetwork"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
+        "target_critic_2": models_cls["QNetwork"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
     }
 
     memory_size = cfg.memory_size or 100_000
     memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
     agent_cfg = TD3_DEFAULT_CONFIG.copy()
-    agent_cfg.update({
-        "batch_size": cfg.td3.batch_size,
-        "discount_factor": cfg.td3.discount_factor,
-        "polyak": cfg.td3.polyak,
-        "actor_learning_rate": cfg.td3.actor_learning_rate,
-        "critic_learning_rate": cfg.td3.critic_learning_rate,
-        "policy_delay": cfg.td3.policy_delay,
-        "smooth_regularization_noise": cfg.td3.smooth_regularization_noise,
-        "smooth_regularization_clip": cfg.td3.smooth_regularization_clip,
-        "experiment": _experiment_cfg(cfg),
-    })
+    agent_cfg.update(
+        {
+            "batch_size": cfg.td3.batch_size,
+            "discount_factor": cfg.td3.discount_factor,
+            "polyak": cfg.td3.polyak,
+            "actor_learning_rate": cfg.td3.actor_learning_rate,
+            "critic_learning_rate": cfg.td3.critic_learning_rate,
+            "policy_delay": cfg.td3.policy_delay,
+            "smooth_regularization_noise": cfg.td3.smooth_regularization_noise,
+            "smooth_regularization_clip": cfg.td3.smooth_regularization_clip,
+            "experiment": _experiment_cfg(cfg),
+        }
+    )
 
-    return TD3(models=models, memory=memory, cfg=agent_cfg,
-               observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return TD3(
+        models=models,
+        memory=memory,
+        cfg=agent_cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
 
 
 def _build_ddpg_torch(env, cfg: SkrlCfg, device: str):
@@ -416,8 +503,12 @@ def _build_ddpg_torch(env, cfg: SkrlCfg, device: str):
 
     models_cls = _create_torch_models(env, cfg.policy, device)
     models = {
-        "policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
+        "policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
+        "target_policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
         "critic": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
         "target_critic": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
     }
@@ -428,17 +519,25 @@ def _build_ddpg_torch(env, cfg: SkrlCfg, device: str):
     memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
     agent_cfg = DDPG_DEFAULT_CONFIG.copy()
-    agent_cfg.update({
-        "batch_size": cfg.ddpg.batch_size,
-        "discount_factor": cfg.ddpg.discount_factor,
-        "polyak": cfg.ddpg.polyak,
-        "actor_learning_rate": cfg.ddpg.actor_learning_rate,
-        "critic_learning_rate": cfg.ddpg.critic_learning_rate,
-        "experiment": _experiment_cfg(cfg),
-    })
+    agent_cfg.update(
+        {
+            "batch_size": cfg.ddpg.batch_size,
+            "discount_factor": cfg.ddpg.discount_factor,
+            "polyak": cfg.ddpg.polyak,
+            "actor_learning_rate": cfg.ddpg.actor_learning_rate,
+            "critic_learning_rate": cfg.ddpg.critic_learning_rate,
+            "experiment": _experiment_cfg(cfg),
+        }
+    )
 
-    return DDPG(models=models, memory=memory, cfg=agent_cfg,
-                observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return DDPG(
+        models=models,
+        memory=memory,
+        cfg=agent_cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
 
 
 def _build_ddpg_jax(env, cfg: SkrlCfg, device: str):
@@ -448,8 +547,12 @@ def _build_ddpg_jax(env, cfg: SkrlCfg, device: str):
 
     models_cls = _create_jax_models(env, cfg.policy, device)
     models = {
-        "policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
-        "target_policy": models_cls["DeterministicPolicy"](env.observation_space, env.action_space, device, cfg.policy),
+        "policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
+        "target_policy": models_cls["DeterministicPolicy"](
+            env.observation_space, env.action_space, device, cfg.policy
+        ),
         "critic": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
         "target_critic": models_cls["QNetwork"](env.observation_space, env.action_space, device, cfg.policy),
     }
@@ -458,17 +561,25 @@ def _build_ddpg_jax(env, cfg: SkrlCfg, device: str):
     memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
     agent_cfg = DDPG_DEFAULT_CONFIG.copy()
-    agent_cfg.update({
-        "batch_size": cfg.ddpg.batch_size,
-        "discount_factor": cfg.ddpg.discount_factor,
-        "polyak": cfg.ddpg.polyak,
-        "actor_learning_rate": cfg.ddpg.actor_learning_rate,
-        "critic_learning_rate": cfg.ddpg.critic_learning_rate,
-        "experiment": _experiment_cfg(cfg),
-    })
+    agent_cfg.update(
+        {
+            "batch_size": cfg.ddpg.batch_size,
+            "discount_factor": cfg.ddpg.discount_factor,
+            "polyak": cfg.ddpg.polyak,
+            "actor_learning_rate": cfg.ddpg.actor_learning_rate,
+            "critic_learning_rate": cfg.ddpg.critic_learning_rate,
+            "experiment": _experiment_cfg(cfg),
+        }
+    )
 
-    return DDPG(models=models, memory=memory, cfg=agent_cfg,
-                observation_space=env.observation_space, action_space=env.action_space, device=device)
+    return DDPG(
+        models=models,
+        memory=memory,
+        cfg=agent_cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
 
 
 def _experiment_cfg(cfg: SkrlCfg) -> dict:
@@ -531,14 +642,17 @@ def train(
     # Set random seeds
     if rl_cfg.backend == "torch":
         import torch
+
         torch.manual_seed(rl_cfg.seed)
         if "cuda" in device:
             torch.cuda.manual_seed(rl_cfg.seed)
     else:
-        import jax
+        pass
         # JAX uses a different seeding mechanism handled by skrl
 
-    logger.info(f"Training with {rl_cfg.algorithm.upper()} ({rl_cfg.backend}) for {rl_cfg.timesteps:,} timesteps")
+    logger.info(
+        f"Training with {rl_cfg.algorithm.upper()} ({rl_cfg.backend}) for {rl_cfg.timesteps:,} timesteps"
+    )
 
     # Create env
     env = ManagerBasedRlEnv(cfg=env_cfg)

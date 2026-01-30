@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from typing import Literal
 
 # ANSI color codes
 COLORS = {
@@ -85,13 +84,8 @@ def format_metric(name: str, value: float, width: int = 40) -> str:
     Returns:
         Formatted metric string.
     """
-    if abs(value) < 0.0001 and value != 0:
-        value_str = f"{value:.2e}"
-    elif abs(value) >= 1000:
-        value_str = f"{value:.2e}"
-    else:
-        value_str = f"{value:.4f}"
-
+    use_scientific = (abs(value) < 0.0001 and value != 0) or abs(value) >= 1000
+    value_str = f"{value:.2e}" if use_scientific else f"{value:.4f}"
     return f"  {name:<{width}} {value_str:>12}"
 
 

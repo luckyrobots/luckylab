@@ -269,5 +269,5 @@ class CurriculumTermManager:
         Args:
             env: The environment instance to update.
         """
-        for name, term_cfg in self.cfg.items():
+        for _name, term_cfg in self.cfg.items():
             term_cfg.func(env, **term_cfg.params)

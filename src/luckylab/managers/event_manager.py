@@ -73,7 +73,7 @@ class EventManager(ManagerBase):
         lines.append("Active Event Terms:")
         lines.append(f"{'Index':<8} {'Name':<30} {'Mode':<10} {'DR':>5}")
         lines.append("-" * 55)
-        for idx, (name, term_cfg) in enumerate(zip(self._term_names, self._term_cfgs)):
+        for idx, (name, term_cfg) in enumerate(zip(self._term_names, self._term_cfgs, strict=False)):
             dr = "Yes" if term_cfg.domain_randomization else "No"
             lines.append(f"{idx:<8} {name:<30} {term_cfg.mode:<10} {dr:>5}")
         return "\n".join(lines)
@@ -94,8 +94,7 @@ class EventManager(ManagerBase):
 
         # Reschedule interval events.
         self._interval_terms = [
-            (name, cfg, self._sample_interval(cfg))
-            for name, cfg, _ in self._interval_terms
+            (name, cfg, self._sample_interval(cfg)) for name, cfg, _ in self._interval_terms
         ]
 
         # Run reset events.
@@ -130,12 +129,12 @@ class EventManager(ManagerBase):
 
     def _run_startup_events(self) -> None:
         """Run all startup events."""
-        for name, cfg in self._startup_terms:
+        for _name, cfg in self._startup_terms:
             self._call_term(cfg)
 
     def _run_reset_events(self) -> None:
         """Run all reset events."""
-        for name, cfg in self._reset_terms:
+        for _name, cfg in self._reset_terms:
             self._call_term(cfg)
 
     def _call_term(self, term_cfg: EventTermCfg) -> None:

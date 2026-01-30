@@ -58,7 +58,7 @@ def action_rate_l2(env: ManagerBasedRlEnv, **kwargs: Any) -> float:
     if env.current_action is None or env.last_action is None:
         return 0.0
     diff = env.current_action - env.last_action
-    return float(np.sum(diff ** 2))
+    return float(np.sum(diff**2))
 
 
 def joint_pos_limits(

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +115,7 @@ class IterationLogger:
         """Initialize TensorBoard writer."""
         try:
             from torch.utils.tensorboard import SummaryWriter
+
             self._writer = SummaryWriter(log_dir=str(self.log_dir))
         except ImportError:
             print("Warning: tensorboard not installed, disabling tensorboard logging")
@@ -123,6 +124,7 @@ class IterationLogger:
         """Initialize Weights & Biases."""
         try:
             import wandb
+
             self._wandb_run = wandb.init(
                 project=self.cfg.wandb_project,
                 entity=self.cfg.wandb_entity,
@@ -176,8 +178,12 @@ class IterationLogger:
                 self._env_metrics[name].append(value)
 
         # Compute statistics
-        mean_reward = sum(self._episode_rewards) / len(self._episode_rewards) if self._episode_rewards else 0.0
-        mean_length = sum(self._episode_lengths) / len(self._episode_lengths) if self._episode_lengths else 0.0
+        mean_reward = (
+            sum(self._episode_rewards) / len(self._episode_rewards) if self._episode_rewards else 0.0
+        )
+        mean_length = (
+            sum(self._episode_lengths) / len(self._episode_lengths) if self._episode_lengths else 0.0
+        )
 
         # Compute FPS
         total_time = collection_time + learn_time
@@ -233,6 +239,7 @@ class IterationLogger:
 
         if self._wandb_run:
             import wandb
+
             wandb.log(metrics, step=step)
 
     def _print_iteration(
@@ -260,7 +267,9 @@ class IterationLogger:
         print()
 
         # Computation
-        print(f"{'Computation:':<40} {fps:.0f} steps/s (collection: {collection_time:.3f}s, learning {learn_time:.3f}s)")
+        print(
+            f"{'Computation:':<40} {fps:.0f} steps/s (collection: {collection_time:.3f}s, learning {learn_time:.3f}s)"
+        )
 
         # Action std
         if action_std is not None:
@@ -374,6 +383,7 @@ class IterationLogger:
 
         if self._wandb_run:
             import wandb
+
             wandb.finish()
 
         # Print final summary

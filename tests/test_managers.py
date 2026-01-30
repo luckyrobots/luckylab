@@ -581,9 +581,7 @@ class TestTerminationManager:
         def dummy_termination(obs_parsed) -> bool:
             return False
 
-        cfg = {
-            "test_term": TerminationTermCfg(func=dummy_termination, time_out=False)
-        }
+        cfg = {"test_term": TerminationTermCfg(func=dummy_termination, time_out=False)}
         env = MockEnv()
         manager = TerminationManager(cfg, env)
 
@@ -736,11 +734,7 @@ class TestEventManager:
         def interval_event(env):
             interval_count[0] += 1
 
-        cfg = {
-            "periodic": EventTermCfg(
-                func=interval_event, mode="interval", interval_range_s=(1.0, 1.0)
-            )
-        }
+        cfg = {"periodic": EventTermCfg(func=interval_event, mode="interval", interval_range_s=(1.0, 1.0))}
         env = MockEnv()
         manager = EventManager(cfg, env)
 
@@ -787,9 +781,7 @@ class TestEventManager:
         def dr_event(env):
             pass
 
-        cfg = {
-            "dr": EventTermCfg(func=dr_event, mode="reset", domain_randomization=True)
-        }
+        cfg = {"dr": EventTermCfg(func=dr_event, mode="reset", domain_randomization=True)}
         env = MockEnv()
         manager = EventManager(cfg, env)
 

@@ -54,7 +54,7 @@ class RewardManager(ManagerBase):
         lines.append("Active Reward Terms:")
         lines.append(f"{'Index':<8} {'Name':<30} {'Weight':>10}")
         lines.append("-" * 50)
-        for idx, (name, term_cfg) in enumerate(zip(self._term_names, self._term_cfgs)):
+        for idx, (name, term_cfg) in enumerate(zip(self._term_names, self._term_cfgs, strict=False)):
             lines.append(f"{idx:<8} {name:<30} {term_cfg.weight:>10.4f}")
         return "\n".join(lines)
 
@@ -99,7 +99,7 @@ class RewardManager(ManagerBase):
         """
         total_reward = 0.0
 
-        for name, term_cfg in zip(self._term_names, self._term_cfgs):
+        for name, term_cfg in zip(self._term_names, self._term_cfgs, strict=False):
             if term_cfg.weight == 0.0:
                 self._step_rewards[name] = 0.0
                 continue

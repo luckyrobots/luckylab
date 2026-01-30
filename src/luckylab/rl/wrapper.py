@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import gymnasium as gym
 import numpy as np
@@ -36,7 +36,9 @@ class SkrlWrapper(gym.Wrapper):
         obs, info = self.env.reset(seed=seed, **kwargs)
         return self._to_tensor(obs), info
 
-    def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    def step(
+        self, actions: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         action_np = actions.squeeze(0).cpu().numpy()
         obs, reward, terminated, truncated, info = self.env.step(action_np)
 

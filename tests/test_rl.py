@@ -1,9 +1,9 @@
 """Tests for LuckyLab RL integration."""
 
+import gymnasium as gym
+import numpy as np
 import pytest
 import torch
-import numpy as np
-import gymnasium as gym
 from gymnasium import spaces
 
 from luckylab.rl.config import (
@@ -162,15 +162,17 @@ class TestRegistryWithRlConfig:
 
     def setup_method(self):
         from luckylab.tasks.registry import clear_registry
+
         clear_registry()
 
     def teardown_method(self):
         from luckylab.tasks.registry import clear_registry
+
         clear_registry()
 
     def test_register_with_rl_cfg(self):
-        from luckylab.tasks.registry import register_task, load_env_cfg, load_rl_cfg
         from luckylab.envs import ManagerBasedRlEnvCfg
+        from luckylab.tasks.registry import load_env_cfg, load_rl_cfg, register_task
 
         def create_test_cfg():
             return ManagerBasedRlEnvCfg(decimation=4)
@@ -187,8 +189,8 @@ class TestRegistryWithRlConfig:
         assert loaded_rl_cfg.algorithm == "sac"
 
     def test_register_without_rl_cfg(self):
-        from luckylab.tasks.registry import register_task, load_env_cfg, load_rl_cfg
         from luckylab.envs import ManagerBasedRlEnvCfg
+        from luckylab.tasks.registry import load_env_cfg, load_rl_cfg, register_task
 
         def create_test_cfg():
             return ManagerBasedRlEnvCfg(decimation=4)
@@ -213,12 +215,8 @@ class MockGymnasiumEnv(gym.Env):
 
     def __init__(self, obs_shape=(48,), action_shape=(12,)):
         super().__init__()
-        self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32
-        )
-        self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=action_shape, dtype=np.float32
-        )
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=action_shape, dtype=np.float32)
         self._obs = np.zeros(obs_shape, dtype=np.float32)
         self._reward = 0.0
         self._terminated = False
@@ -285,15 +283,15 @@ class TestExports:
 
     def test_rl_module_exports(self):
         from luckylab.rl import (
-            SkrlCfg,
             ActorCriticCfg,
+            DdpgCfg,
             PpoCfg,
             SacCfg,
-            Td3Cfg,
-            DdpgCfg,
-            train,
-            load_agent,
+            SkrlCfg,
             SkrlWrapper,
+            Td3Cfg,
+            load_agent,
+            train,
             wrap_env,
         )
 
@@ -347,12 +345,12 @@ class TestMdpFunctions:
 
     def test_reward_functions_importable(self):
         from luckylab.tasks.velocity.mdp import (
-            track_linear_velocity,
-            track_angular_velocity,
-            variable_posture,
+            action_rate_l2,
             body_angular_velocity_penalty,
             joint_pos_limits,
-            action_rate_l2,
+            track_angular_velocity,
+            track_linear_velocity,
+            variable_posture,
         )
 
         assert callable(track_linear_velocity)
@@ -364,12 +362,12 @@ class TestMdpFunctions:
 
     def test_termination_functions_importable(self):
         from luckylab.tasks.velocity.mdp import (
-            time_out,
             bad_orientation,
-            root_height_below_minimum,
-            nan_detection,
             fall_termination,
             max_steps_termination,
+            nan_detection,
+            root_height_below_minimum,
+            time_out,
         )
 
         assert callable(time_out)

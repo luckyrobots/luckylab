@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -241,6 +241,7 @@ class MetricsLogger:
 
         if self.cfg.log_to_wandb and self._wandb_run:
             import wandb
+
             wandb.log(metrics, step=step)
 
         if self.cfg.log_to_tensorboard and self._tb_writer:
@@ -257,13 +258,12 @@ class MetricsLogger:
 
         # Compute rolling average for each metric
         for name, history in self._metric_history.items():
-            if len(history) > 0:
-                # Only compute rolling stats for episode-level metrics
-                if name.startswith("Episode"):
-                    avg = sum(history) / len(history)
-                    # Use shorter key for rolling stats
-                    short_name = name.split("/")[-1] if "/" in name else name
-                    stats[f"Rolling/{short_name}"] = avg
+            # Only compute rolling stats for non-empty episode-level metrics
+            if len(history) > 0 and name.startswith("Episode"):
+                avg = sum(history) / len(history)
+                # Use shorter key for rolling stats
+                short_name = name.split("/")[-1] if "/" in name else name
+                stats[f"Rolling/{short_name}"] = avg
 
         return stats
 
@@ -299,8 +299,7 @@ class MetricsLogger:
 
         # Filter to only numeric values
         numeric_metrics = {
-            k: v for k, v in metrics.items()
-            if isinstance(v, (int, float)) and not isinstance(v, bool)
+            k: v for k, v in metrics.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
         }
         wandb.log(numeric_metrics, step=self.total_steps)
 
@@ -343,7 +342,7 @@ class MetricsLogger:
 
         # Compute std
         variance = sum((x - mean) ** 2 for x in history) / len(history)
-        std = variance ** 0.5
+        std = variance**0.5
 
         return {
             "mean": mean,
@@ -383,8 +382,7 @@ class MetricsLogger:
 
             # Find episode-level metrics
             episode_metrics = {
-                k: v for k, v in self._metric_history.items()
-                if k.startswith("Episode") and len(v) > 0
+                k: v for k, v in self._metric_history.items() if k.startswith("Episode") and len(v) > 0
             }
 
             for name, history in sorted(episode_metrics.items()):
@@ -402,6 +400,7 @@ class MetricsLogger:
 
         if self._wandb_run:
             import wandb
+
             wandb.finish()
 
         if self._tb_writer:
