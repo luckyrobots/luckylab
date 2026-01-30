@@ -5,20 +5,20 @@ on:
     branches:
       - main
     paths:
-      - "gym_luckyworld/**"
+      - "luckygym/**"
       - "tests/**"
-      - "examples.py"
+      - "example.py"
       - ".github/**"
-      - "poetry.lock"
+      - "pyproject.toml"
   push:
     branches:
       - main
     paths:
-      - "gym_luckyworld/**"
+      - "luckygym/**"
       - "tests/**"
-      - "examples.py"
+      - "example.py"
       - ".github/**"
-      - "poetry.lock"
+      - "pyproject.toml"
 
 jobs:
   pytest:
@@ -27,21 +27,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install poetry
-        run: |
-          pipx install poetry && poetry config virtualenvs.in-project true
-          echo "${{ github.workspace }}/.venv/bin" >> $GITHUB_PATH
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
 
-      - name: Set up Python 3.13
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
-          cache: "poetry"
+          python-version: "3.10"
 
-      - name: Install poetry dependencies
-        run: |
-          poetry install --all-extras
+      - name: Install dependencies
+        run: uv sync --all-groups
 
       - name: Test with pytest
-        run: |
-          pytest tests -v --cov=./gym_luckyworld --durations=0
+        run: uv run pytest tests -v --cov=./luckygym --durations=0
