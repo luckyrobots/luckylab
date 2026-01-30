@@ -21,6 +21,9 @@ Usage:
     # Custom timesteps and seed
     python -m luckylab.scripts.train --task go1_velocity_flat --timesteps 500000 --seed 123
 
+    # Connect to LuckyEngine at specific address
+    python -m luckylab.scripts.train --task go1_velocity_flat --host localhost --port 50051
+
 Examples:
     # Basic PPO training (PyTorch)
     python -m luckylab.scripts.train --task go1_velocity_flat
@@ -80,6 +83,20 @@ def main() -> int:
         type=str,
         default="cpu",
         help="Device to run training on (default: cpu)",
+    )
+
+    # LuckyEngine connection
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="LuckyEngine gRPC host address (default: from task config)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="LuckyEngine gRPC port (default: from task config)",
     )
 
     # Training parameters
@@ -152,6 +169,15 @@ def main() -> int:
         # Make a copy to avoid modifying the original
         rl_cfg = copy.deepcopy(rl_cfg)
 
+    # Apply env_cfg overrides (LuckyEngine connection)
+    if args.host is not None:
+        env_cfg.host = args.host
+        logger.info(f"Using host: {args.host}")
+
+    if args.port is not None:
+        env_cfg.port = args.port
+        logger.info(f"Using port: {args.port}")
+
     # Apply CLI overrides
     if args.backend is not None:
         rl_cfg.backend = args.backend
@@ -191,6 +217,7 @@ def main() -> int:
     logger.info(f"  Algorithm: {rl_cfg.algorithm.upper()}")
     logger.info(f"  Backend: {rl_cfg.backend}")
     logger.info(f"  Device: {args.device}")
+    logger.info(f"  LuckyEngine: {env_cfg.host}:{env_cfg.port}")
     logger.info(f"  Timesteps: {rl_cfg.timesteps:,}")
     logger.info(f"  Seed: {rl_cfg.seed}")
     logger.info(f"  Experiment: {rl_cfg.experiment_name}")
