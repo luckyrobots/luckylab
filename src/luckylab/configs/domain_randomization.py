@@ -1,10 +1,10 @@
 """Domain randomization configuration.
 
-Note: PhysicsDRCfg should eventually move to luckyrobots package
-so it can be shared between LuckyLab and LuckyEngine.
+PhysicsDRCfg is passed to LuckyEngine on reset() via gRPC.
+The luckyrobots client converts it to the DomainRandomizationConfig proto.
 
-For observation domain randomization, use ObservationProcessorCfg from
-luckylab.managers.observation_manager instead.
+For observation domain randomization (noise, delay, history), configure
+ObservationGroupCfg in your environment config with delay_range and history_length.
 """
 
 from dataclasses import dataclass

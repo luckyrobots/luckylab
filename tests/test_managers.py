@@ -1,28 +1,18 @@
 """Tests for LuckyLab managers."""
 
 import numpy as np
-import pytest
 
 from luckylab.managers import (
-    CommandManager,
-    CurriculumCfg,
     CurriculumManager,
     CurriculumTermCfg,
-    CurriculumTermManager,
     EpisodeMetrics,
-    EventManager,
-    EventTermCfg,
-    NoiseCfg,
-    ObservationProcessor,
-    ObservationProcessorCfg,
+    NullCurriculumManager,
     RewardManager,
     RewardTermCfg,
     TerminationManager,
     TerminationTermCfg,
-    VelocityCommand,
-    VelocityCommandCfg,
-    create_default_observation_processor,
 )
+from luckylab.tasks.velocity.mdp import UniformVelocityCommand, UniformVelocityCommandCfg
 
 
 class TestEpisodeMetrics:
@@ -69,270 +59,66 @@ class TestEpisodeMetrics:
         assert metrics.terminated is False
 
 
-class TestVelocityCommand:
-    def test_initial_command(self):
-        cfg = VelocityCommandCfg()
-        cmd = VelocityCommand(cfg)
-        assert cmd.command.shape == (4,)
-        assert cmd.dim == 4
+class TestUniformVelocityCommandCfg:
+    """Tests for the new UniformVelocityCommandCfg that inherits from CommandTermCfg."""
 
-    def test_resample(self):
-        cfg = VelocityCommandCfg(zero_command_prob=0.0)
-        cmd = VelocityCommand(cfg)
-        _ = cmd.command.copy()  # Store initial for potential future comparison
-        cmd.resample()
-        # Command should be different after resample (very unlikely to be same)
-        # But we can't guarantee it, so just check shape
-        assert cmd.command.shape == (4,)
+    def test_default_values(self):
+        """Test that default values are set correctly."""
+        cfg = UniformVelocityCommandCfg()
+        assert cfg.resampling_time_range == (5.0, 10.0)
+        assert cfg.zero_command_prob == 0.1
+        assert cfg.class_type == UniformVelocityCommand
 
-    def test_zero_command_prob(self):
-        cfg = VelocityCommandCfg(zero_command_prob=1.0)
-        cmd = VelocityCommand(cfg)
-        cmd.resample()
-        np.testing.assert_array_equal(cmd.command, np.zeros(4))
+    def test_nested_ranges_class(self):
+        """Test nested Ranges dataclass."""
+        ranges = UniformVelocityCommandCfg.Ranges(
+            lin_vel_x=(-2.0, 2.0),
+            lin_vel_y=(-1.0, 1.0),
+            ang_vel_z=(-1.5, 1.5),
+            heading=(-3.0, 3.0),
+        )
+        assert ranges.lin_vel_x == (-2.0, 2.0)
+        assert ranges.lin_vel_y == (-1.0, 1.0)
 
-    def test_reset(self):
-        cfg = VelocityCommandCfg()
-        cmd = VelocityCommand(cfg)
-        cmd.reset()
-        assert cmd.command.shape == (4,)
+    def test_custom_ranges(self):
+        """Test creating config with custom ranges."""
+        cfg = UniformVelocityCommandCfg(
+            resampling_time_range=(3.0, 6.0),
+            ranges=UniformVelocityCommandCfg.Ranges(
+                lin_vel_x=(-0.5, 0.5),
+            ),
+            zero_command_prob=0.2,
+        )
+        assert cfg.resampling_time_range == (3.0, 6.0)
+        assert cfg.ranges.lin_vel_x == (-0.5, 0.5)
+        assert cfg.zero_command_prob == 0.2
 
-    def test_update_decrements_time(self):
-        cfg = VelocityCommandCfg(resample_interval_range=(10.0, 10.0))
-        cmd = VelocityCommand(cfg)
-        initial_time = cmd._time_left
-        cmd.update(1.0)
-        assert cmd._time_left == initial_time - 1.0
 
+class MockEnv:
+    """Mock environment for testing managers."""
 
-class TestCommandManager:
-    def test_add_and_get_command(self):
-        manager = CommandManager()
-        manager.add_command("velocity", VelocityCommand(VelocityCommandCfg()))
+    def __init__(self, num_envs: int = 1):
+        self.num_envs = num_envs
+        self._num_envs = num_envs
+        self.common_step_counter = 0
+        self.step_count = np.zeros(num_envs, dtype=np.int64)
+        self.max_episode_length = 1000
+        self.max_steps = 1000
+        self._device = "cpu"
 
-        cmd = manager.get_command("velocity")
-        assert cmd.shape == (4,)
-
-    def test_get_nonexistent_command(self):
-        manager = CommandManager()
-        with pytest.raises(KeyError):
-            manager.get_command("nonexistent")
-
-    def test_get_all_commands(self):
-        manager = CommandManager()
-        manager.add_command("velocity", VelocityCommand(VelocityCommandCfg()))
-
-        all_cmds = manager.get_all_commands()
-        assert "velocity" in all_cmds
-        assert all_cmds["velocity"].shape == (4,)
-
-    def test_reset(self):
-        manager = CommandManager()
-        manager.add_command("velocity", VelocityCommand(VelocityCommandCfg()))
-        manager.reset()
-        # Should not raise
-        cmd = manager.get_command("velocity")
-        assert cmd.shape == (4,)
+    @property
+    def device(self) -> str:
+        return self._device
 
 
 class TestCurriculumManager:
-    def test_initial_levels(self):
-        cfg = CurriculumCfg()
-        manager = CurriculumManager(cfg)
-
-        assert manager.terrain_level == 0
-        assert manager.push_level == 0
-        assert manager.velocity_level == 0
-
-    def test_update_without_enough_data(self):
-        cfg = CurriculumCfg(min_episodes_before_advance=10)
-        manager = CurriculumManager(cfg)
-
-        # Add less than min_episodes
-        for _ in range(5):
-            manager.update({"survived": True, "total_reward": 100, "episode_length": 500})
-
-        # Levels should not advance
-        assert manager.terrain_level == 0
-
-    def test_get_dr_cfg(self):
-        cfg = CurriculumCfg(terrain_levels=(0.0, 0.5, 1.0))
-        manager = CurriculumManager(cfg)
-
-        dr_cfg = manager.get_dr_cfg()
-        assert dr_cfg.terrain_difficulty == 0.0
-
-    def test_get_velocity_command_range(self):
-        cfg = CurriculumCfg(velocity_range_levels=((0.5, 0.5), (1.0, 1.0)))
-        manager = CurriculumManager(cfg)
-
-        vel_range = manager.get_velocity_command_range()
-        assert vel_range == (0.5, 0.5)
-
-    def test_get_metrics(self):
-        cfg = CurriculumCfg()
-        manager = CurriculumManager(cfg)
-
-        metrics = manager.get_metrics()
-        assert "curriculum/terrain_level" in metrics
-        assert "curriculum/survival_rate" in metrics
-
-
-class TestObservationProcessor:
-    def test_passthrough_no_processing(self):
-        """Test that with default config, observation passes through unchanged."""
-        cfg = ObservationProcessorCfg()
-        processor = ObservationProcessor(obs_dim=10, cfg=cfg)
-
-        obs = np.random.randn(10).astype(np.float32)
-        processor.reset(obs)
-        result = processor.process(obs)
-
-        np.testing.assert_array_almost_equal(obs, result)
-
-    def test_gaussian_noise(self):
-        """Test that gaussian noise is applied."""
-        cfg = ObservationProcessorCfg(global_noise=NoiseCfg(type="gaussian", std=0.1))
-        processor = ObservationProcessor(obs_dim=10, cfg=cfg)
-
-        obs = np.zeros(10, dtype=np.float32)
-        processor.reset(obs)
-        result = processor.process(obs)
-
-        # With noise, result should not be exactly zero
-        assert not np.allclose(result, obs, atol=1e-6)
-
-    def test_uniform_noise(self):
-        """Test that uniform noise is applied."""
-        cfg = ObservationProcessorCfg(global_noise=NoiseCfg(type="uniform", low=-0.1, high=0.1))
-        processor = ObservationProcessor(obs_dim=10, cfg=cfg)
-
-        obs = np.zeros(10, dtype=np.float32)
-        processor.reset(obs)
-        result = processor.process(obs)
-
-        # Result should be within noise bounds
-        assert np.all(result >= -0.1)
-        assert np.all(result <= 0.1)
-
-    def test_scaling(self):
-        """Test that global scaling is applied."""
-        cfg = ObservationProcessorCfg(global_scale=2.0)
-        processor = ObservationProcessor(obs_dim=10, cfg=cfg)
-
-        obs = np.ones(10, dtype=np.float32)
-        processor.reset(obs)
-        result = processor.process(obs)
-
-        np.testing.assert_array_almost_equal(result, obs * 2.0)
-
-    def test_clipping(self):
-        """Test that global clipping is applied."""
-        cfg = ObservationProcessorCfg(global_clip=(-0.5, 0.5))
-        processor = ObservationProcessor(obs_dim=10, cfg=cfg)
-
-        obs = np.array([-1.0, -0.5, 0.0, 0.5, 1.0] * 2, dtype=np.float32)
-        processor.reset(obs)
-        result = processor.process(obs)
-
-        assert np.all(result >= -0.5)
-        assert np.all(result <= 0.5)
-
-    def test_delay_buffer(self):
-        """Test that delay buffer works correctly."""
-        cfg = ObservationProcessorCfg(global_delay_range=(2, 2))  # Fixed delay of 2
-        processor = ObservationProcessor(obs_dim=3, cfg=cfg)
-
-        # Initialize with zeros
-        init_obs = np.zeros(3, dtype=np.float32)
-        processor.reset(init_obs)
-
-        # Send sequence of observations
-        obs1 = np.array([1.0, 1.0, 1.0], dtype=np.float32)
-        obs2 = np.array([2.0, 2.0, 2.0], dtype=np.float32)
-        obs3 = np.array([3.0, 3.0, 3.0], dtype=np.float32)
-
-        # With delay=2, we should get the observation from 2 steps ago
-        result1 = processor.process(obs1)  # Should get init (delay buffer filled with init)
-        result2 = processor.process(obs2)  # Should get init
-        result3 = processor.process(obs3)  # Should get obs1
-
-        np.testing.assert_array_almost_equal(result1, init_obs)
-        np.testing.assert_array_almost_equal(result2, init_obs)
-        np.testing.assert_array_almost_equal(result3, obs1)
-
-    def test_history_stacking(self):
-        """Test that history stacking works correctly."""
-        cfg = ObservationProcessorCfg(history_length=3, flatten_history=True)
-        processor = ObservationProcessor(obs_dim=2, cfg=cfg)
-
-        init_obs = np.zeros(2, dtype=np.float32)
-        processor.reset(init_obs)
-
-        # Output dimension should be obs_dim * history_length
-        assert processor.output_dim == 6
-
-        obs1 = np.array([1.0, 1.0], dtype=np.float32)
-        result = processor.process(obs1)
-
-        # Should be [init, init, obs1] flattened
-        expected = np.array([0.0, 0.0, 0.0, 0.0, 1.0, 1.0], dtype=np.float32)
-        np.testing.assert_array_almost_equal(result, expected)
-
-    def test_history_not_flattened(self):
-        """Test history stacking without flattening."""
-        cfg = ObservationProcessorCfg(history_length=3, flatten_history=False)
-        processor = ObservationProcessor(obs_dim=2, cfg=cfg)
-
-        init_obs = np.zeros(2, dtype=np.float32)
-        processor.reset(init_obs)
-
-        # Output dimension should be obs_dim (not expanded, shape is (history, obs_dim))
-        assert processor.output_dim == 2
-
-    def test_create_default_processor(self):
-        """Test the convenience factory function."""
-        processor = create_default_observation_processor(
-            obs_dim=10,
-            noise_std=0.05,
-            delay_range=(1, 3),
-            history_length=2,
-        )
-
-        assert processor.obs_dim == 10
-        assert processor.output_dim == 20  # 10 * 2 (history)
-
-    def test_reset_clears_state(self):
-        """Test that reset properly clears processor state."""
-        cfg = ObservationProcessorCfg(
-            global_delay_range=(1, 1),
-            history_length=2,
-        )
-        processor = ObservationProcessor(obs_dim=3, cfg=cfg)
-
-        # Process some observations
-        obs1 = np.ones(3, dtype=np.float32)
-        processor.reset(obs1)
-        processor.process(obs1 * 2)
-        processor.process(obs1 * 3)
-
-        # Reset with new observation
-        new_init = np.zeros(3, dtype=np.float32)
-        processor.reset(new_init)
-
-        # State should be cleared
-        result = processor.process(np.ones(3, dtype=np.float32))
-        # History should be filled with new_init, delay buffer with new_init
-        assert result is not None
-
-
-class TestCurriculumTermManager:
-    """Tests for the new dict-based CurriculumTermManager (mjlab pattern)."""
+    """Tests for the new ManagerBase-based CurriculumManager."""
 
     def test_init_with_empty_cfg(self):
         """Test initialization with empty curriculum dict."""
-        manager = CurriculumTermManager({})
-        assert manager.cfg == {}
+        env = MockEnv()
+        manager = CurriculumManager({}, env)
+        assert manager.active_terms == []
 
     def test_init_with_terms(self):
         """Test initialization with curriculum terms."""
@@ -346,12 +132,14 @@ class TestCurriculumTermManager:
                 params={"value": 0.5},
             )
         }
-        manager = CurriculumTermManager(cfg)
-        assert "test_term" in manager.cfg
+        env = MockEnv()
+        manager = CurriculumManager(cfg, env)
+        assert "test_term" in manager.active_terms
+        # Function-based terms keep their original function reference
         assert manager.cfg["test_term"].func is dummy_curriculum
 
-    def test_update_calls_curriculum_functions(self):
-        """Test that update calls all curriculum functions with env."""
+    def test_compute_calls_curriculum_functions(self):
+        """Test that compute calls all curriculum functions with env."""
 
         calls = []
 
@@ -368,14 +156,11 @@ class TestCurriculumTermManager:
                 params={"name": "b"},
             ),
         }
-        manager = CurriculumTermManager(cfg)
-
-        # Create a mock env
-        class MockEnv:
-            common_step_counter = 100
-
         env = MockEnv()
-        manager.update(env)
+        env.common_step_counter = 100
+        manager = CurriculumManager(cfg, env)
+
+        manager.compute()
 
         # Both functions should have been called
         assert len(calls) == 2
@@ -404,37 +189,63 @@ class TestCurriculumTermManager:
                 },
             )
         }
-        manager = CurriculumTermManager(cfg)
-
-        class MockEnv:
-            common_step_counter = 0
-            terrain_difficulty = 0.0
-
         env = MockEnv()
+        env.terrain_difficulty = 0.0
+        manager = CurriculumManager(cfg, env)
 
         # At step 0, difficulty should be 0.0
         env.common_step_counter = 0
-        manager.update(env)
+        manager.compute()
         assert env.terrain_difficulty == 0.0
 
         # At step 150, difficulty should be 0.5
         env.common_step_counter = 150
-        manager.update(env)
+        manager.compute()
         assert env.terrain_difficulty == 0.5
 
         # At step 250, difficulty should be 1.0
         env.common_step_counter = 250
-        manager.update(env)
+        manager.compute()
         assert env.terrain_difficulty == 1.0
 
+    def test_reset_returns_empty_dict(self):
+        """Test that reset returns empty dict (curriculum has no stats)."""
+        env = MockEnv()
+        manager = CurriculumManager({}, env)
+        result = manager.reset()
+        assert result == {}
 
-class MockEnv:
-    """Mock environment for testing managers."""
+    def test_str_representation(self):
+        """Test string representation of manager."""
 
-    def __init__(self):
-        self.common_step_counter = 0
-        self.step_count = 0
-        self.max_episode_length = 1000
+        def dummy_curriculum(env) -> None:
+            pass
+
+        cfg = {"test": CurriculumTermCfg(func=dummy_curriculum)}
+        env = MockEnv()
+        manager = CurriculumManager(cfg, env)
+
+        s = str(manager)
+        assert "<CurriculumManager>" in s
+        assert "test" in s
+
+
+class TestNullCurriculumManager:
+    """Tests for NullCurriculumManager."""
+
+    def test_active_terms_empty(self):
+        manager = NullCurriculumManager()
+        assert manager.active_terms == []
+
+    def test_reset_returns_empty(self):
+        manager = NullCurriculumManager()
+        assert manager.reset() == {}
+
+    def test_compute_is_noop(self):
+        manager = NullCurriculumManager()
+        # Should not raise
+        manager.compute()
+        manager.compute(env_ids=np.array([0, 1]))
 
 
 class TestRewardManager:
@@ -505,7 +316,7 @@ class TestRewardManager:
         for _ in range(5):
             manager.compute(context)
 
-        assert manager.episode_sums["reward"] == 5.0
+        assert manager.episode_sums(0)["reward"] == 5.0
 
     def test_reset_returns_episode_stats(self):
         """Test that reset returns episode statistics."""
@@ -529,7 +340,7 @@ class TestRewardManager:
         assert stats["Episode_Reward/reward"] == 6.0  # 3 * 2.0
 
         # Episode sums should be reset
-        assert manager.episode_sums["reward"] == 0.0
+        assert manager.episode_sums(0)["reward"] == 0.0
 
     def test_zero_weight_term_skipped(self):
         """Test that terms with zero weight are skipped."""
@@ -567,7 +378,7 @@ class TestRewardManager:
 
 
 class TestTerminationManager:
-    """Tests for the TerminationManager class."""
+    """Tests for the TerminationManager class (multi-env support)."""
 
     def test_init_with_empty_cfg(self):
         """Test initialization with empty terminations dict."""
@@ -588,7 +399,7 @@ class TestTerminationManager:
         assert "test_term" in manager.active_terms
 
     def test_terminated_vs_truncated(self):
-        """Test distinction between terminated and truncated."""
+        """Test distinction between terminated and truncated (multi-env)."""
 
         def failure_condition(obs_parsed) -> bool:
             return obs_parsed.get("failed", False)
@@ -607,9 +418,10 @@ class TestTerminationManager:
         context = {"obs_parsed": {"failed": True, "timeout": False}}
         manager.compute(context)
 
-        assert manager.terminated is True
-        assert manager.truncated is False
-        assert manager.dones is True
+        # With multi-env, these return arrays
+        assert manager.terminated[0] is True or manager.terminated[0] == True  # noqa: E712
+        assert manager.truncated[0] is False or manager.truncated[0] == False  # noqa: E712
+        assert manager.dones[0] is True or manager.dones[0] == True  # noqa: E712
 
         manager.reset()
 
@@ -617,9 +429,8 @@ class TestTerminationManager:
         context = {"obs_parsed": {"failed": False, "timeout": True}}
         manager.compute(context)
 
-        assert manager.terminated is False
-        assert manager.truncated is True
-        assert manager.dones is True
+        assert manager.terminated[0] is False or manager.terminated[0] == False  # noqa: E712
+        assert manager.truncated[0] is True or manager.truncated[0] == True  # noqa: E712
 
     def test_multiple_terminations(self):
         """Test that multiple termination reasons are tracked."""
@@ -640,7 +451,7 @@ class TestTerminationManager:
         context = {"obs_parsed": {}}
         manager.compute(context)
 
-        reasons = manager.termination_reasons
+        reasons = manager.termination_reasons(env_idx=0)
         assert "cond_a" in reasons
         assert "cond_b" in reasons
 
@@ -656,14 +467,14 @@ class TestTerminationManager:
 
         context = {"obs_parsed": {}}
         manager.compute(context)
-        assert manager.terminated is True
+        assert manager.terminated[0] is True or manager.terminated[0] == True  # noqa: E712
 
         manager.reset()
-        assert manager.terminated is False
-        assert manager.truncated is False
+        assert manager.terminated[0] is False or manager.terminated[0] == False  # noqa: E712
+        assert manager.truncated[0] is False or manager.truncated[0] == False  # noqa: E712
 
     def test_get_term(self):
-        """Test getting individual term state."""
+        """Test getting individual term state (returns array)."""
 
         def cond_a(obs_parsed) -> bool:
             return True
@@ -681,108 +492,6 @@ class TestTerminationManager:
         context = {"obs_parsed": {}}
         manager.compute(context)
 
-        assert manager.get_term("cond_a") is True
-        assert manager.get_term("cond_b") is False
-
-
-class TestEventManager:
-    """Tests for the EventManager class."""
-
-    def test_init_with_empty_cfg(self):
-        """Test initialization with empty events dict."""
-        env = MockEnv()
-        manager = EventManager({}, env)
-        assert manager.active_terms == []
-
-    def test_startup_event_runs_on_init(self):
-        """Test that startup events run during initialization."""
-        startup_called = [False]
-
-        def startup_event(env):
-            startup_called[0] = True
-
-        cfg = {"startup": EventTermCfg(func=startup_event, mode="startup")}
-        env = MockEnv()
-        EventManager(cfg, env)
-
-        assert startup_called[0] is True
-
-    def test_reset_event_runs_on_reset(self):
-        """Test that reset events run when reset() is called."""
-        reset_count = [0]
-
-        def reset_event(env):
-            reset_count[0] += 1
-
-        cfg = {"on_reset": EventTermCfg(func=reset_event, mode="reset")}
-        env = MockEnv()
-        manager = EventManager(cfg, env)
-
-        # Initial count should be 0 (startup doesn't run reset events)
-        assert reset_count[0] == 0
-
-        manager.reset()
-        assert reset_count[0] == 1
-
-        manager.reset()
-        assert reset_count[0] == 2
-
-    def test_interval_event(self):
-        """Test that interval events run at correct times."""
-        interval_count = [0]
-
-        def interval_event(env):
-            interval_count[0] += 1
-
-        cfg = {"periodic": EventTermCfg(func=interval_event, mode="interval", interval_range_s=(1.0, 1.0))}
-        env = MockEnv()
-        manager = EventManager(cfg, env)
-
-        # Initially 0
-        assert interval_count[0] == 0
-
-        # Update with small timestep - should not trigger
-        manager.update(0.5)
-        assert interval_count[0] == 0
-
-        # Update past the interval - should trigger
-        manager.update(0.6)
-        assert interval_count[0] == 1
-
-        # Continue updating - should trigger again after another 1.0s
-        manager.update(1.0)
-        assert interval_count[0] == 2
-
-    def test_event_receives_params(self):
-        """Test that events receive their configured parameters."""
-        received_params = {}
-
-        def param_event(env, value: float, name: str):
-            received_params["value"] = value
-            received_params["name"] = name
-
-        cfg = {
-            "with_params": EventTermCfg(
-                func=param_event,
-                mode="reset",
-                params={"value": 42.0, "name": "test"},
-            )
-        }
-        env = MockEnv()
-        manager = EventManager(cfg, env)
-        manager.reset()
-
-        assert received_params["value"] == 42.0
-        assert received_params["name"] == "test"
-
-    def test_domain_randomization_flag(self):
-        """Test that domain_randomization flag is preserved in config."""
-
-        def dr_event(env):
-            pass
-
-        cfg = {"dr": EventTermCfg(func=dr_event, mode="reset", domain_randomization=True)}
-        env = MockEnv()
-        manager = EventManager(cfg, env)
-
-        assert manager.cfg["dr"].domain_randomization is True
+        # get_term returns array
+        assert manager.get_term("cond_a")[0] is True or manager.get_term("cond_a")[0] == True  # noqa: E712
+        assert manager.get_term("cond_b")[0] is False or manager.get_term("cond_b")[0] == False  # noqa: E712

@@ -1,9 +1,9 @@
 """Type definitions for luckylab environments."""
 
-import numpy as np
+import torch
 
-# Observation type: dict of observation arrays
-VecEnvObs = dict[str, np.ndarray | dict[str, np.ndarray]]
+# Observation type: dict of observation tensors
+VecEnvObs = dict[str, torch.Tensor | dict[str, torch.Tensor]]
 
 # Step return type: (obs, reward, terminated, truncated, info)
-VecEnvStepReturn = tuple[VecEnvObs, float, bool, bool, dict]
+VecEnvStepReturn = tuple[VecEnvObs, torch.Tensor, torch.Tensor, torch.Tensor, dict]

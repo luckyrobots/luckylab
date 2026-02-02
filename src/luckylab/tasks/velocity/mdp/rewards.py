@@ -1,185 +1,253 @@
-"""Reward functions for locomotion tasks, adapted from Isaac Lab."""
+"""Reward functions for velocity locomotion tasks.
 
-import math
+Task-specific rewards for velocity tracking. Re-exports general rewards
+from envs.mdp.rewards for convenience.
 
-import numpy as np
+Matches mjlab/tasks/velocity/mdp/rewards.py structure.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import torch
+
+from luckylab.envs.mdp.rewards import action_rate_l2 as action_rate_l2
+from luckylab.envs.mdp.rewards import flat_orientation_l2 as flat_orientation_l2
+from luckylab.envs.mdp.rewards import is_alive as is_alive
+from luckylab.envs.mdp.rewards import is_terminated as is_terminated
+from luckylab.envs.mdp.rewards import joint_pos_limits as joint_pos_limits
+from luckylab.envs.mdp.rewards import posture as posture
+from luckylab.managers.manager_term_config import RewardTermCfg
+from luckylab.managers.scene_entity_config import SceneEntityCfg
+from luckylab.utils.string import resolve_matching_names_values
+
+if TYPE_CHECKING:
+    from luckylab.entity import Entity
+    from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
+
+
+_DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
+
+##
+# Velocity tracking rewards.
+##
 
 
 def track_linear_velocity(
-    obs_parsed: dict[str, np.ndarray],
-    std: float = math.sqrt(0.25),
-) -> float:
-    """
-    Reward for tracking the commanded base linear velocity.
+    env: ManagerBasedRlEnv,
+    std: float,
+    command_name: str,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Reward for tracking the commanded base linear velocity.
 
     The commanded z velocity is assumed to be zero.
-
-    Args:
-        obs_parsed: Parsed observation dictionary
-        std: Standard deviation for exponential reward
-
-    Returns:
-        Reward value (0-1, higher is better)
     """
-    commands = obs_parsed["commands"]  # [vx, vy, wz, heading]
-    actual = obs_parsed["base_lin_vel"]  # [x, y, z]
-
-    # Track xy velocity, penalize z velocity
-    xy_error = np.sum(np.square(commands[:2] - actual[:2]))
-    z_error = actual[2] ** 2
+    asset: Entity = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    assert command is not None, f"Command '{command_name}' not found."
+    actual = asset.data.root_link_lin_vel_b
+    xy_error = torch.sum(torch.square(command[:, :2] - actual[:, :2]), dim=1)
+    z_error = torch.square(actual[:, 2])
     lin_vel_error = xy_error + z_error
-
-    return float(np.exp(-lin_vel_error / (std**2)))
+    return torch.exp(-lin_vel_error / std**2)
 
 
 def track_angular_velocity(
-    obs_parsed: dict[str, np.ndarray],
-    std: float = math.sqrt(0.5),
-) -> float:
-    """
-    Reward for tracking the commanded angular velocity.
+    env: ManagerBasedRlEnv,
+    std: float,
+    command_name: str,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Reward heading error for heading-controlled envs, angular velocity for others.
 
     The commanded xy angular velocities are assumed to be zero.
-
-    Args:
-        obs_parsed: Parsed observation dictionary
-        std: Standard deviation for exponential reward
-
-    Returns:
-        Reward value (0-1, higher is better)
     """
-    commands = obs_parsed["commands"]  # [vx, vy, wz, heading]
-    actual = obs_parsed["base_ang_vel"]  # [x, y, z]
-
-    # Track z angular velocity, penalize xy angular velocity
-    z_error = (commands[2] - actual[2]) ** 2
-    xy_error = np.sum(np.square(actual[:2]))
+    asset: Entity = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    assert command is not None, f"Command '{command_name}' not found."
+    actual = asset.data.root_link_ang_vel_b
+    z_error = torch.square(command[:, 2] - actual[:, 2])
+    xy_error = torch.sum(torch.square(actual[:, :2]), dim=1)
     ang_vel_error = z_error + xy_error
+    return torch.exp(-ang_vel_error / std**2)
 
-    return float(np.exp(-ang_vel_error / (std**2)))
+
+##
+# Orientation rewards.
+##
 
 
-def variable_posture(
-    obs_parsed: dict[str, np.ndarray],
-    std_standing: float | np.ndarray = 0.1,
-    std_walking: float | np.ndarray = 0.2,
-    std_running: float | np.ndarray = 0.3,
-    walking_threshold: float = 0.05,
-    running_threshold: float = 1.5,
-) -> float:
+def flat_orientation(
+    env: ManagerBasedRlEnv,
+    std: float,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Reward flat base orientation (robot being upright).
+
+    Uses exponential kernel with std parameter.
+
+    Note: mjlab's version can compute projected gravity for specific bodies
+    using body_ids. LuckyLab only has root-level data from LuckyEngine,
+    so body_names/body_ids in asset_cfg are accepted for API compatibility
+    but not used - we always use root link projected gravity.
+
+    TODO: Add body-level projected gravity support if LuckyEngine provides
+    body_link_quat_w and gravity_vec_w in the observation schema. This would
+    require using quat_apply_inverse to project gravity into the body frame:
+        body_quat_w = asset.data.body_link_quat_w[:, asset_cfg.body_ids, :]
+        gravity_w = asset.data.gravity_vec_w
+        projected_gravity_b = quat_apply_inverse(body_quat_w, gravity_w)
     """
-    Penalize deviation from default pose, with tighter constraints when standing.
+    asset: Entity = env.scene[asset_cfg.name]
+    xy_squared = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
+    return torch.exp(-xy_squared / std**2)
 
-    Joint positions are already relative to default, so we just penalize deviation.
 
-    Args:
-        obs_parsed: Parsed observation dictionary
-        std_standing: Standard deviation when standing (can be scalar or per-joint)
-        std_walking: Standard deviation when walking (can be scalar or per-joint)
-        std_running: Standard deviation when running (can be scalar or per-joint)
-        walking_threshold: Speed threshold for walking mode
-        running_threshold: Speed threshold for running mode
-
-    Returns:
-        Reward value (0-1, higher is better)
-    """
-    commands = obs_parsed["commands"]  # [vx, vy, wz, heading]
-    joint_pos = obs_parsed["joint_pos"]  # Already relative to default
-
-    # Compute total command speed
-    linear_speed = np.linalg.norm(commands[:2])
-    angular_speed = abs(commands[2])
-    total_speed = linear_speed + angular_speed
-
-    # Select std based on speed
-    if total_speed < walking_threshold:
-        std = std_standing
-    elif total_speed < running_threshold:
-        std = std_walking
-    else:
-        std = std_running
-
-    # Ensure std is array if joint_pos is array
-    if isinstance(std, (int, float)):
-        std = np.full_like(joint_pos, std, dtype=np.float32)
-    else:
-        std = np.asarray(std, dtype=np.float32)
-
-    # Compute error squared
-    error_squared = np.square(joint_pos)
-
-    # Exponential reward
-    return float(np.exp(-np.mean(error_squared / (std**2))))
+##
+# Body velocity penalties.
+##
 
 
 def body_angular_velocity_penalty(
-    obs_parsed: dict[str, np.ndarray],
-) -> float:
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Penalize excessive body angular velocities.
+
+    Note: mjlab's version uses world-frame angular velocity for specific bodies
+    using body_ids. LuckyLab only has root-level data from LuckyEngine,
+    so body_names/body_ids in asset_cfg are accepted for API compatibility
+    but not used - we always use root link body-frame angular velocity.
     """
-    Penalize excessive body angular velocities (xy components only).
+    asset: Entity = env.scene[asset_cfg.name]
+    ang_vel = asset.data.root_link_ang_vel_b
+    ang_vel_xy = ang_vel[:, :2]  # Don't penalize z-angular velocity.
+    return torch.sum(torch.square(ang_vel_xy), dim=1)
+
+
+##
+# Foot-based rewards.
+##
+
+
+def feet_air_time(
+    env: ManagerBasedRlEnv,
+    threshold_min: float = 0.05,
+    threshold_max: float = 0.5,
+    command_name: str | None = None,
+    command_threshold: float = 0.5,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Reward feet air time within a target range.
+
+    Encourages alternating foot contacts (gait) by rewarding feet that have
+    been in the air for an appropriate duration.
 
     Args:
-        obs_parsed: Parsed observation dictionary
+        env: The environment instance.
+        threshold_min: Minimum air time to reward (default 0.05s).
+        threshold_max: Maximum air time to reward (default 0.5s).
+        command_name: Optional command name to scale reward by velocity.
+        command_threshold: Velocity threshold for scaling (default 0.5).
+        asset_cfg: Configuration for the asset.
 
     Returns:
-        Penalty value (non-negative, lower is better)
+        Reward tensor, shape (num_envs,).
     """
-    base_ang_vel = obs_parsed["base_ang_vel"]  # [x, y, z]
-    ang_vel_xy = base_ang_vel[:2]  # Don't penalize z-angular velocity
-    return float(np.sum(np.square(ang_vel_xy)))
+    asset: Entity = env.scene[asset_cfg.name]
+    current_air_time = asset.data.foot_air_time
+    assert current_air_time is not None, "foot_air_time is None - ensure LuckyEngine provides this data"
+
+    # Reward feet with air time in the target range
+    in_range = (current_air_time > threshold_min) & (current_air_time < threshold_max)
+    reward = torch.sum(in_range.float(), dim=1)
+
+    # Log mean air time for debugging
+    in_air = current_air_time > 0
+    num_in_air = torch.sum(in_air.float())
+    mean_air_time = torch.sum(current_air_time * in_air.float()) / torch.clamp(num_in_air, min=1)
+    env.extras["log"]["Metrics/air_time_mean"] = mean_air_time
+
+    # Optionally scale by command velocity
+    if command_name is not None:
+        command = env.command_manager.get_command(command_name)
+        if command is not None:
+            linear_norm = torch.norm(command[:, :2], dim=1)
+            angular_norm = torch.abs(command[:, 2])
+            total_command = linear_norm + angular_norm
+            scale = (total_command > command_threshold).float()
+            reward *= scale
+
+    return reward
 
 
-def joint_pos_limits(
-    obs_parsed: dict[str, np.ndarray],
-    action_low: np.ndarray,
-    action_high: np.ndarray,
-    margin: float = 0.1,
-) -> float:
-    """
-    Penalize joint positions near limits.
-
-    Args:
-        obs_parsed: Parsed observation dictionary
-        action_low: Lower joint limits
-        action_high: Upper joint limits
-        margin: Margin from limits to start penalizing (as fraction of range)
-
-    Returns:
-        Penalty value (non-negative, lower is better)
-    """
-    joint_pos = obs_parsed["joint_pos"]
-    # Joint positions are relative to default, so we need to add default back
-    # For simplicity, assume default is middle of range
-    default_pos = (action_low + action_high) / 2.0
-    absolute_joint_pos = joint_pos + default_pos
-
-    # Compute distance to limits
-    range_size = action_high - action_low
-    margin_size = margin * range_size
-
-    dist_to_low = absolute_joint_pos - (action_low + margin_size)
-    dist_to_high = (action_high - margin_size) - absolute_joint_pos
-
-    # Penalty when within margin of limits
-    penalty_low = np.sum(np.maximum(0.0, -dist_to_low) ** 2)
-    penalty_high = np.sum(np.maximum(0.0, -dist_to_high) ** 2)
-
-    return float(penalty_low + penalty_high)
+##
+# Posture rewards.
+##
 
 
-def action_rate_l2(
-    current_action: np.ndarray,
-    last_action: np.ndarray,
-) -> float:
-    """
-    Penalize large action changes (L2 norm of action difference).
+class variable_posture:
+    """Penalize deviation from default pose, with tighter constraints when standing."""
 
-    Args:
-        current_action: Current action
-        last_action: Previous action
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+        asset_cfg = cfg.params.get("asset_cfg", _DEFAULT_ASSET_CFG)
+        asset: Entity = env.scene[asset_cfg.name]
+        joint_names = asset.data.joint_names
 
-    Returns:
-        Penalty value (non-negative, lower is better)
-    """
-    action_diff = current_action - last_action
-    return float(np.sum(np.square(action_diff)))
+        _, _, std_standing = resolve_matching_names_values(
+            data=cfg.params["std_standing"],
+            list_of_strings=joint_names,
+        )
+        self.std_standing = torch.tensor(std_standing, device=env.device, dtype=torch.float32)
+
+        _, _, std_walking = resolve_matching_names_values(
+            data=cfg.params["std_walking"],
+            list_of_strings=joint_names,
+        )
+        self.std_walking = torch.tensor(std_walking, device=env.device, dtype=torch.float32)
+
+        _, _, std_running = resolve_matching_names_values(
+            data=cfg.params["std_running"],
+            list_of_strings=joint_names,
+        )
+        self.std_running = torch.tensor(std_running, device=env.device, dtype=torch.float32)
+
+    def __call__(
+        self,
+        env: ManagerBasedRlEnv,
+        std_standing,
+        std_walking,
+        std_running,
+        command_name: str,
+        walking_threshold: float = 0.5,
+        running_threshold: float = 1.5,
+        asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    ) -> torch.Tensor:
+        del std_standing, std_walking, std_running  # Unused - resolved in __init__.
+
+        asset: Entity = env.scene[asset_cfg.name]
+        command = env.command_manager.get_command(command_name)
+        assert command is not None
+
+        linear_speed = torch.norm(command[:, :2], dim=1)
+        angular_speed = torch.abs(command[:, 2])
+        total_speed = linear_speed + angular_speed
+
+        standing_mask = (total_speed < walking_threshold).float()
+        walking_mask = ((total_speed >= walking_threshold) & (total_speed < running_threshold)).float()
+        running_mask = (total_speed >= running_threshold).float()
+
+        std = (
+            self.std_standing * standing_mask.unsqueeze(1)
+            + self.std_walking * walking_mask.unsqueeze(1)
+            + self.std_running * running_mask.unsqueeze(1)
+        )
+
+        joint_pos = asset.data.joint_pos
+        default_joint_pos = asset.data.default_joint_pos
+        error_squared = torch.square(joint_pos - default_joint_pos)
+
+        return torch.exp(-torch.mean(error_squared / (std**2), dim=1))

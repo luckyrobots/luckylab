@@ -1,7 +1,7 @@
 """skrl configuration - simple configs that map to skrl's native API."""
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass
@@ -16,6 +16,12 @@ class ActorCriticCfg:
     """Activation function ('elu', 'relu', 'tanh', 'leaky_relu')."""
     init_noise_std: float = 1.0
     """Initial noise standard deviation for stochastic policies."""
+
+    # Observation normalization (matches mjlab's actor/critic obs normalization)
+    normalize_actor_obs: bool = False
+    """Whether to normalize observations for actor (running mean/std)."""
+    normalize_critic_obs: bool = False
+    """Whether to normalize observations for critic (running mean/std)."""
 
 
 @dataclass
@@ -42,8 +48,18 @@ class PpoCfg:
     """Entropy bonus coefficient."""
     grad_norm_clip: float = 1.0
     """Max gradient norm."""
-    kl_threshold: float = 0.0
-    """KL threshold for early stopping (0 = disabled)."""
+    kl_threshold: float = 0.01
+    """KL threshold for early stopping (matches mjlab's desired_kl=0.01)."""
+
+    # Learning rate scheduling (matches mjlab's adaptive/fixed schedule)
+    lr_schedule: Literal["fixed", "adaptive", "linear"] = "adaptive"
+    """Learning rate schedule type:
+    - 'fixed': constant learning rate
+    - 'adaptive': reduce LR when KL > 2*kl_threshold, increase when KL < 0.5*kl_threshold
+    - 'linear': linearly decay to 0 over training
+    """
+    lr_schedule_kwargs: dict[str, Any] = field(default_factory=dict)
+    """Additional kwargs for lr scheduler (e.g., {'end_factor': 0.1} for linear)."""
 
 
 @dataclass
@@ -62,12 +78,16 @@ class SacCfg:
     """Critic learning rate."""
     learn_entropy: bool = True
     """Whether to learn entropy coefficient."""
-    initial_entropy: float = 1.0
+    initial_entropy: float = 0.2
     """Initial entropy coefficient."""
     target_entropy: float | None = None
     """Target entropy (None = auto)."""
     grad_norm_clip: float = 0.0
     """Max gradient norm (0 = disabled)."""
+    random_timesteps: int = 10000
+    """Number of timesteps with random actions for initial exploration."""
+    learning_starts: int = 1000
+    """Number of timesteps before learning starts (buffer must have this many samples)."""
 
 
 @dataclass
@@ -114,12 +134,8 @@ class SkrlCfg:
     Top-level skrl training configuration.
 
     Supports multiple algorithms: PPO, SAC, TD3, DDPG.
-    Uses skrl's native training loop, logging, and checkpointing.
+    Uses PyTorch backend with skrl's training loop.
     """
-
-    # Backend selection
-    backend: Literal["torch", "jax"] = "torch"
-    """Deep learning backend ('torch' or 'jax')."""
 
     # Algorithm selection
     algorithm: Literal["ppo", "sac", "td3", "ddpg"] = "ppo"
@@ -130,6 +146,8 @@ class SkrlCfg:
     """Random seed."""
     timesteps: int = 1_000_000
     """Total training timesteps."""
+    rollout_steps: int = 24
+    """Steps per iteration (collection phase). For PPO this is steps_per_env."""
     memory_size: int | None = None
     """Replay buffer size (None = auto based on algorithm)."""
 
@@ -155,11 +173,13 @@ class SkrlCfg:
     checkpoint_interval: int = 1000
     """Timesteps between checkpoints (0 = disabled)."""
 
-    # Logging (uses skrl's native logging)
-    logger: Literal["tensorboard", "wandb"] | None = "tensorboard"
+    # Logging
+    logger: Literal["wandb"] | None = "wandb"
     """Logger backend (None = disabled)."""
     wandb_project: str = "luckylab"
     """W&B project name."""
+    wandb_entity: str | None = "mjlab"
+    """W&B entity (team/user name)."""
 
     # Scope for simultaneous training
     scope: str | None = None

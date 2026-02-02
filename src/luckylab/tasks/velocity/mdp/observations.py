@@ -1,51 +1,33 @@
-"""Observation parsing utilities for velocity task."""
+"""Observation functions and utilities for velocity task.
 
-import numpy as np
+Re-exports observation functions from envs.mdp.observations for use in
+velocity_env_cfg. Also provides observation clipping ranges.
+"""
 
+# Re-export observation functions from envs.mdp
+from luckylab.envs.mdp.observations import base_ang_vel as base_ang_vel
+from luckylab.envs.mdp.observations import base_lin_vel as base_lin_vel
+from luckylab.envs.mdp.observations import foot_air_time as foot_air_time
+from luckylab.envs.mdp.observations import foot_contact as foot_contact
+from luckylab.envs.mdp.observations import foot_contact_forces as foot_contact_forces
+from luckylab.envs.mdp.observations import foot_height as foot_height
+from luckylab.envs.mdp.observations import generated_commands as generated_commands
+from luckylab.envs.mdp.observations import joint_pos as joint_pos
+from luckylab.envs.mdp.observations import joint_pos_rel as joint_pos_rel
+from luckylab.envs.mdp.observations import joint_vel as joint_vel
+from luckylab.envs.mdp.observations import joint_vel_rel as joint_vel_rel
+from luckylab.envs.mdp.observations import last_action as last_action
+from luckylab.envs.mdp.observations import projected_gravity as projected_gravity
 
-class ObservationParser:
-    """Parser for flat observation arrays from LuckyRobots.
-
-    Converts flat numpy arrays into structured dictionaries with named components.
-    """
-
-    def __init__(self, num_joints: int) -> None:
-        """
-        Initialize observation parser.
-
-        Args:
-            num_joints: Number of joints in the robot
-        """
-        self.num_joints = num_joints
-        # Observation structure:
-        # [0:4] = commands: [vx, vy, wz, heading]
-        # [4:7] = base_lin_vel: [x, y, z] (body frame)
-        # [7:10] = base_ang_vel: [x, y, z] (body frame)
-        # [10:10+num_joints] = joint_pos (relative to default)
-        # [10+num_joints:10+2*num_joints] = joint_vel
-        # [10+2*num_joints:10+3*num_joints] = last_act
-        self.commands_idx = slice(0, 4)
-        self.base_lin_vel_idx = slice(4, 7)
-        self.base_ang_vel_idx = slice(7, 10)
-        self.joint_pos_idx = slice(10, 10 + num_joints)
-        self.joint_vel_idx = slice(10 + num_joints, 10 + 2 * num_joints)
-        self.last_act_idx = slice(10 + 2 * num_joints, 10 + 3 * num_joints)
-
-    def parse(self, obs_array: np.ndarray) -> dict[str, np.ndarray]:
-        """
-        Parse flat observation array into components.
-
-        Args:
-            obs_array: Flat observation array
-
-        Returns:
-            Dictionary with parsed components
-        """
-        return {
-            "commands": obs_array[self.commands_idx],  # [vx, vy, wz, heading]
-            "base_lin_vel": obs_array[self.base_lin_vel_idx],  # [x, y, z]
-            "base_ang_vel": obs_array[self.base_ang_vel_idx],  # [x, y, z]
-            "joint_pos": obs_array[self.joint_pos_idx],  # relative to default
-            "joint_vel": obs_array[self.joint_vel_idx],
-            "last_act": obs_array[self.last_act_idx],
-        }
+OBSERVATION_CLIP_RANGES: dict[str, tuple[float, float]] = {
+    "base_lin_vel": (-10.0, 10.0),
+    "base_ang_vel": (-20.0, 20.0),
+    "projected_gravity": (-1.0, 1.0),
+    "joint_pos": (-3.14159, 3.14159),
+    "joint_vel": (-30.0, 30.0),
+    # Privileged observations (singular names matching mjlab)
+    "foot_contact": (0.0, 1.0),
+    "foot_height": (-1.0, 1.0),
+    "foot_contact_forces": (0.0, 500.0),
+    "foot_air_time": (0.0, 2.0),
+}

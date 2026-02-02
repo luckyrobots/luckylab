@@ -1,12 +1,15 @@
 """Termination manager for computing done signals.
 
-This module provides the TerminationManager class which aggregates multiple
-termination terms and distinguishes between terminated and truncated states.
+Matches mjlab pattern where termination functions take `env` as first parameter.
 """
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
+
+import torch
+from prettytable import PrettyTable
 
 from .manager_base import ManagerBase
 from .manager_term_config import TerminationTermCfg
@@ -21,178 +24,131 @@ class TerminationManager(ManagerBase):
     Aggregates multiple termination terms and distinguishes between:
     - terminated: Episode ended due to failure condition (e.g., fell over).
     - truncated: Episode ended due to time limit (not a failure).
-
-    This distinction is important for proper value bootstrapping in RL.
-
-    Attributes:
-        cfg: Dictionary mapping term names to TerminationTermCfg.
-        active_terms: List of active term names.
-        terminated: Whether episode terminated due to failure.
-        truncated: Whether episode was truncated (time out).
     """
 
     _env: ManagerBasedRlEnv
 
     def __init__(self, cfg: dict[str, TerminationTermCfg], env: ManagerBasedRlEnv) -> None:
-        """Initialize the termination manager.
-
-        Args:
-            cfg: Dictionary mapping term names to TerminationTermCfg instances.
-            env: The environment instance.
-        """
         self._term_names: list[str] = []
         self._term_cfgs: list[TerminationTermCfg] = []
-        self._class_term_cfgs: list[TerminationTermCfg] = []
+        self._term_instances: dict[str, object] = {}
 
         self.cfg = cfg
         super().__init__(env=env)
 
-        # Track which terms triggered.
-        self._term_dones: dict[str, bool] = {name: False for name in self._term_names}
+        # Track which terms triggered for each env
+        self._term_dones: dict[str, torch.Tensor] = {
+            name: torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+            for name in self._term_names
+        }
 
-        # Separate buffers for terminated vs truncated.
-        self._truncated: bool = False
-        self._terminated: bool = False
+        self._truncated_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._terminated_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
     def __str__(self) -> str:
-        """Get string representation of the manager."""
-        lines = [f"<TerminationManager> contains {len(self._term_names)} active terms."]
-        lines.append("Active Termination Terms:")
-        lines.append(f"{'Index':<8} {'Name':<30} {'Time Out':>10}")
-        lines.append("-" * 50)
-        for idx, (name, term_cfg) in enumerate(zip(self._term_names, self._term_cfgs, strict=False)):
-            lines.append(f"{idx:<8} {name:<30} {str(term_cfg.time_out):>10}")
-        return "\n".join(lines)
+        msg = f"<TerminationManager> contains {len(self._term_names)} active terms.\n"
+        table = PrettyTable()
+        table.title = "Active Termination Terms"
+        table.field_names = ["Index", "Name", "Time Out"]
+        table.align["Name"] = "l"
+        for index, (name, term_cfg) in enumerate(
+        zip(self._term_names, self._term_cfgs, strict=False)
+        ):
+            table.add_row([index, name, term_cfg.time_out])
+        msg += table.get_string()
+        msg += "\n"
+        return msg
+    
+    # Properties
 
     @property
     def active_terms(self) -> list[str]:
-        """Get list of active term names."""
         return self._term_names
 
     @property
-    def dones(self) -> bool:
-        """Check if episode is done (terminated OR truncated)."""
-        return self._truncated or self._terminated
+    def dones(self) -> torch.Tensor:
+        """Check if episodes are done (terminated OR truncated)."""
+        return self._truncated_buf | self._terminated_buf
 
     @property
-    def truncated(self) -> bool:
-        """Check if episode was truncated (time out)."""
-        return self._truncated
+    def truncated(self) -> torch.Tensor:
+        """Check if episodes were truncated (time out)."""
+        return self._truncated_buf
 
     @property
-    def terminated(self) -> bool:
-        """Check if episode was terminated (failure)."""
-        return self._terminated
+    def terminated(self) -> torch.Tensor:
+        """Check if episodes were terminated (failure)."""
+        return self._terminated_buf
 
-    @property
-    def termination_reasons(self) -> list[str]:
-        """Get list of terms that triggered termination."""
-        return [name for name, done in self._term_dones.items() if done]
+    def termination_reasons(self, env_idx: int = 0) -> list[str]:
+        return [name for name, done in self._term_dones.items() if done[env_idx].item()]
 
-    def reset(self) -> dict[str, int]:
-        """Reset the manager and return episode statistics.
+    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, Any]:
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
 
-        Returns:
-            Dictionary with termination counts for each term.
-        """
-        extras: dict[str, int] = {}
-
-        # Store which terms triggered before resetting.
+        extras: dict[str, Any] = {}
         for name in self._term_names:
-            extras[f"Episode_Termination/{name}"] = int(self._term_dones[name])
-            self._term_dones[name] = False
+            extras[f"Episode_Termination/{name}"] = self._term_dones[name][env_ids].sum().item()
+            self._term_dones[name][env_ids] = False
 
-        # Reset state.
-        self._truncated = False
-        self._terminated = False
-
-        # Reset class-based terms.
-        for term_cfg in self._class_term_cfgs:
-            term_cfg.func.reset()
+        self._truncated_buf[env_ids] = False
+        self._terminated_buf[env_ids] = False
 
         return extras
 
-    def compute(self, context: dict[str, Any]) -> bool:
-        """Compute termination signals for the current step.
-
-        Args:
-            context: MDP context dictionary with observations, actions, etc.
-
-        Returns:
-            True if episode should end (terminated OR truncated).
-        """
-        self._truncated = False
-        self._terminated = False
+    def compute(self) -> torch.Tensor:
+        """Compute termination signals for the current step."""
+        self._truncated_buf.zero_()
+        self._terminated_buf.zero_()
 
         for name, term_cfg in zip(self._term_names, self._term_cfgs, strict=False):
-            # Call the termination function.
-            value = self._call_term(term_cfg, context)
+            value = self._call_term(name, term_cfg)
 
-            if value:
-                self._term_dones[name] = True
+            # Ensure tensor on correct device
+            if not isinstance(value, torch.Tensor):
+                value = torch.tensor(value, dtype=torch.bool, device=self.device)
+            elif value.device != self.device:
+                value = value.to(self.device)
+            if value.dim() == 0:
+                value = value.expand(self.num_envs)
 
-                if term_cfg.time_out:
-                    self._truncated = True
-                else:
-                    self._terminated = True
+            self._term_dones[name] = value
 
-        return self._truncated or self._terminated
+            if term_cfg.time_out:
+                self._truncated_buf |= value
+            else:
+                self._terminated_buf |= value
 
-    def _call_term(self, term_cfg: TerminationTermCfg, context: dict[str, Any]) -> bool:
-        """Call a termination term function.
+        return self._truncated_buf | self._terminated_buf
 
-        Args:
-            term_cfg: The term configuration.
-            context: MDP context dictionary.
+    def _call_term(self, name: str, term_cfg: TerminationTermCfg) -> torch.Tensor:
+        """Call a termination term function."""
+        # Check if it's a class-based term (has an instance)
+        if name in self._term_instances:
+            instance = self._term_instances[name]
+            return instance(self._env, **term_cfg.params)
 
-        Returns:
-            True if termination condition is met.
-        """
-        func = term_cfg.func
-        kwargs = dict(term_cfg.params)
-        func_name = getattr(func, "__name__", str(func))
+        # Function-based term - call with env as first arg
+        return term_cfg.func(self._env, **term_cfg.params)
 
-        obs_parsed = context.get("obs_parsed")
+    def get_term(self, name: str) -> torch.Tensor:
+        return self._term_dones.get(name, torch.zeros(self.num_envs, dtype=torch.bool, device=self.device))
 
-        # Handle special cases for different function signatures.
-        if func_name in ("time_out", "max_steps_termination"):
-            return func(context["step_count"], context["max_steps"], **kwargs)
-        elif func_name == "nan_detection":
-            return func(obs_parsed)
-        else:
-            if obs_parsed is None:
-                return False
-            return func(obs_parsed, **kwargs)
-
-    def get_term(self, name: str) -> bool:
-        """Get the done state for a specific term.
-
-        Args:
-            name: Term name.
-
-        Returns:
-            True if this term triggered.
-        """
-        return self._term_dones.get(name, False)
-
-    def get_active_iterable_terms(self) -> list[tuple[str, list[float]]]:
-        """Get term values for iteration/logging.
-
-        Returns:
-            List of (term_name, [done_value]) tuples.
-        """
-        return [(name, [float(self._term_dones[name])]) for name in self._term_names]
+    def get_active_iterable_terms(self, env_idx: int = 0) -> list[tuple[str, list[float]]]:
+        return [(name, [float(self._term_dones[name][env_idx].item())]) for name in self._term_names]
 
     def _prepare_terms(self) -> None:
-        """Parse configuration and prepare terms."""
         for term_name, term_cfg in self.cfg.items():
             if term_cfg is None:
                 continue
-
             self._resolve_common_term_cfg(term_name, term_cfg)
+
+            # Check if func is a class (has __init__ and __call__)
+            if inspect.isclass(term_cfg.func):
+                # Instantiate class-based term with (cfg, env)
+                instance = term_cfg.func(term_cfg, self._env)
+                self._term_instances[term_name] = instance
+
             self._term_names.append(term_name)
             self._term_cfgs.append(term_cfg)
-
-            # Track class-based terms for reset.
-            if hasattr(term_cfg.func, "reset") and callable(term_cfg.func.reset):
-                self._class_term_cfgs.append(term_cfg)

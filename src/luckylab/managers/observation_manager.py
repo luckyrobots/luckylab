@@ -1,370 +1,375 @@
-"""Observation processing with domain randomization (noise, delay, history)."""
+"""Observation manager for computing observations with noise, delay, and history.
+
+Follows mjlab pattern where observations are computed by calling functions
+and noise is applied based on the term configuration.
+
+Pipeline: Term Functions → Noise (per-term) → Concatenate → Delay → History
+"""
+
+from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-import numpy as np
+import torch
 
+from .manager_term_config import ObservationGroupCfg, ObservationTermCfg
 
-@dataclass
-class NoiseCfg:
-    """Noise configuration for observations."""
-
-    type: str = "gaussian"  # "gaussian", "uniform", "none"
-    mean: float = 0.0  # For gaussian
-    std: float = 0.0  # For gaussian
-    low: float = 0.0  # For uniform
-    high: float = 0.0  # For uniform
-
-
-@dataclass
-class ObservationTermCfg:
-    """Configuration for processing a single observation term."""
-
-    # Slice indices for this term in the observation vector
-    start_idx: int = 0
-    end_idx: int = -1  # -1 means end of observation
-
-    # Processing pipeline (applied in order)
-    noise: NoiseCfg | None = None
-    scale: float = 1.0
-    clip: tuple[float, float] | None = None  # (low, high)
-
-    # Delay (in steps) - samples uniformly from range
-    delay_range: tuple[int, int] = (0, 0)  # (min_steps, max_steps)
-
-
-@dataclass
-class ObservationProcessorCfg:
-    """Configuration for the observation processor."""
-
-    # Per-term configurations (applied to slices of observation)
-    terms: dict[str, ObservationTermCfg] = field(default_factory=dict)
-
-    # Global noise (applied to entire observation if no per-term config)
-    global_noise: NoiseCfg | None = None
-
-    # Global scale
-    global_scale: float = 1.0
-
-    # Global clip
-    global_clip: tuple[float, float] | None = None
-
-    # Global delay range (in steps)
-    global_delay_range: tuple[int, int] = (0, 0)
-
-    # History stacking
-    history_length: int = 1  # 1 = no history, just current observation
-    flatten_history: bool = True  # Flatten [T, obs_dim] to [T * obs_dim]
+if TYPE_CHECKING:
+    from ..envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 class DelayBuffer:
-    """
-    Circular buffer for simulating observation delay.
+    """Circular buffer for simulating observation delay (torch-based)."""
 
-    Stores observations and returns them after a configurable delay.
-    """
-
-    def __init__(self, obs_dim: int, max_delay: int):
-        """
-        Initialize delay buffer.
-
-        Args:
-            obs_dim: Dimension of observation vector
-            max_delay: Maximum delay in steps
-        """
+    def __init__(self, num_envs: int, obs_dim: int, max_delay: int, device: torch.device):
+        self.num_envs = num_envs
         self.obs_dim = obs_dim
         self.max_delay = max_delay
-        self.buffer_size = max_delay + 1  # Need +1 to store current + delayed
+        self.buffer_size = max_delay + 1
+        self.device = device
 
-        # Circular buffer
-        self.buffer = np.zeros((self.buffer_size, obs_dim), dtype=np.float32)
+        # Buffer shape: (buffer_size, num_envs, obs_dim)
+        self.buffer = torch.zeros((self.buffer_size, num_envs, obs_dim), dtype=torch.float32, device=device)
         self.write_idx = 0
+        # Per-env delay (can vary per environment)
+        self.current_delay = torch.zeros(num_envs, dtype=torch.long, device=device)
 
-        # Current delay (can vary per reset)
-        self.current_delay = 0
+    def set_delay(self, delay: int | torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
+        """Set the current delay for specified environments."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
 
-    def set_delay(self, delay: int) -> None:
-        """Set the current delay (call on reset)."""
-        self.current_delay = min(delay, self.max_delay)
+        if isinstance(delay, int):
+            delay = torch.full((len(env_ids),), delay, dtype=torch.long, device=self.device)
 
-    def reset(self, initial_obs: np.ndarray) -> None:
-        """Reset buffer with initial observation."""
-        self.buffer.fill(0)
-        # Fill entire buffer with initial observation
+        self.current_delay[env_ids] = torch.clamp(delay, 0, self.max_delay)
+
+    def reset(self, initial_obs: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
+        """Reset buffer with initial observation for specified environments."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+
+        # Fill entire buffer with initial observation for reset envs
         for i in range(self.buffer_size):
-            self.buffer[i] = initial_obs
-        self.write_idx = 0
+            self.buffer[i, env_ids] = initial_obs[env_ids] if initial_obs.dim() == 2 else initial_obs
 
-    def push_and_get(self, obs: np.ndarray) -> np.ndarray:
-        """
-        Push new observation and get delayed observation.
-
-        Args:
-            obs: Current observation
-
-        Returns:
-            Delayed observation
-        """
+    def push_and_get(self, obs: torch.Tensor) -> torch.Tensor:
+        """Push new observation and get delayed observation."""
         # Write current observation
         self.buffer[self.write_idx] = obs
 
-        # Calculate read index (delay steps behind write)
+        # Compute read indices per environment
         read_idx = (self.write_idx - self.current_delay) % self.buffer_size
 
-        # Advance write index
+        # Gather delayed observations
+        result = self.buffer[read_idx, torch.arange(self.num_envs, device=self.device)]
+
+        # Advance write pointer
         self.write_idx = (self.write_idx + 1) % self.buffer_size
 
-        return self.buffer[read_idx].copy()
+        return result
 
 
 class HistoryBuffer:
-    """
-    Buffer for stacking observation history.
+    """Buffer for stacking observation history (torch-based)."""
 
-    Maintains a sliding window of past observations.
-    """
-
-    def __init__(self, obs_dim: int, history_length: int, flatten: bool = True):
-        """
-        Initialize history buffer.
-
-        Args:
-            obs_dim: Dimension of single observation
-            history_length: Number of observations to stack
-            flatten: Whether to flatten output
-        """
+    def __init__(
+        self,
+        num_envs: int,
+        obs_dim: int,
+        history_length: int,
+        device: torch.device,
+        flatten: bool = True,
+    ):
+        self.num_envs = num_envs
         self.obs_dim = obs_dim
         self.history_length = history_length
         self.flatten = flatten
+        self.device = device
 
-        # Use deque for efficient sliding window
-        self.history: deque[np.ndarray] = deque(maxlen=history_length)
+        # Use deque per environment for simplicity
+        # Shape after stacking: (num_envs, history_length, obs_dim) or (num_envs, history_length * obs_dim)
+        self._history: list[deque[torch.Tensor]] = [deque(maxlen=history_length) for _ in range(num_envs)]
 
-    def reset(self, initial_obs: np.ndarray) -> None:
-        """Reset history with initial observation."""
-        self.history.clear()
-        # Fill history with initial observation
-        for _ in range(self.history_length):
-            self.history.append(initial_obs.copy())
+    def reset(self, initial_obs: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
+        """Reset history with initial observation for specified environments."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
 
-    def push_and_get(self, obs: np.ndarray) -> np.ndarray:
-        """
-        Push new observation and get stacked history.
+        for env_id in env_ids.tolist():
+            self._history[env_id].clear()
+            obs = initial_obs[env_id] if initial_obs.dim() == 2 else initial_obs
+            for _ in range(self.history_length):
+                self._history[env_id].append(obs.clone())
 
-        Args:
-            obs: Current observation
+    def push_and_get(self, obs: torch.Tensor) -> torch.Tensor:
+        """Push new observation and get stacked history."""
+        results = []
+        for env_id in range(self.num_envs):
+            self._history[env_id].append(obs[env_id].clone())
+            stacked = torch.stack(list(self._history[env_id]), dim=0)
+            if self.flatten:
+                stacked = stacked.flatten()
+            results.append(stacked)
 
-        Returns:
-            Stacked observations [history_length, obs_dim] or flattened
-        """
-        self.history.append(obs.copy())
-
-        # Stack: oldest to newest
-        stacked = np.array(list(self.history), dtype=np.float32)
-
-        if self.flatten:
-            return stacked.flatten()
-        return stacked
+        return torch.stack(results, dim=0)
 
     @property
     def output_dim(self) -> int:
         """Get output dimension."""
         if self.flatten:
             return self.obs_dim * self.history_length
-        return self.obs_dim  # Shape would be (history_length, obs_dim)
+        return self.obs_dim
 
 
-class ObservationProcessor:
-    """
-    Processes observations with domain randomization.
+class ObservationManager:
+    """Manages observation computation, noise, delay, and history.
 
-    Pipeline: Raw Obs → Per-term Processing → Global Processing → Delay → History
+    Pipeline: Term Functions → Noise (per-term) → Concatenate → Delay → History
 
-    Per-term processing (if configured):
-        - Noise injection
-        - Scaling
-        - Clipping
-
-    Global processing (applied after per-term):
-        - Global noise
-        - Global scaling
-        - Global clipping
-
-    Temporal processing:
-        - Delay buffer (simulates sensor latency)
-        - History stacking (for temporal context)
+    Computes observations by calling term functions and applies:
+    - Per-term noise (when enable_corruption=True)
+    - Per-term scaling and clipping
+    - Optional delay simulation (sensor latency)
+    - Optional history stacking (temporal context)
     """
 
-    def __init__(self, obs_dim: int, cfg: ObservationProcessorCfg):
-        """
-        Initialize observation processor.
+    def __init__(
+        self,
+        groups: dict[str, ObservationGroupCfg],
+        env: ManagerBasedRlEnv,
+    ) -> None:
+        """Initialize the observation manager.
 
         Args:
-            obs_dim: Dimension of raw observation
-            cfg: Processor configuration
+            groups: Dict mapping group names to their configurations.
+            env: The environment instance.
         """
-        self.obs_dim = obs_dim
-        self.cfg = cfg
+        self._env = env
+        self._groups = groups
+        self._device = env.device
+        self._num_envs = env.num_envs
 
-        # Random state for noise generation
-        self._rng = np.random.default_rng()
+        # Pre-instantiate class-based terms (those with __init__ that takes cfg, env)
+        self._term_instances: dict[str, dict[str, object]] = {}
+        for group_name, group_cfg in groups.items():
+            self._term_instances[group_name] = {}
+            for term_name, term_cfg in group_cfg.terms.items():
+                if isinstance(term_cfg.func, type):
+                    # Class-based term: instantiate it
+                    self._term_instances[group_name][term_name] = term_cfg.func(term_cfg, env)
+                else:
+                    # Function-based term: store None
+                    self._term_instances[group_name][term_name] = None
 
-        # Initialize delay buffer if delay is configured
-        max_delay = max(cfg.global_delay_range[1], 0)
-        for term_cfg in cfg.terms.values():
-            max_delay = max(max_delay, term_cfg.delay_range[1])
+        # Track observation dimensions per group (computed lazily)
+        self._group_dims: dict[str, int] = {}
 
-        self.delay_buffer: DelayBuffer | None = None
-        if max_delay > 0:
-            self.delay_buffer = DelayBuffer(obs_dim, max_delay)
+        # Delay and history buffers per group (initialized lazily)
+        self._delay_buffers: dict[str, DelayBuffer | None] = {}
+        self._history_buffers: dict[str, HistoryBuffer | None] = {}
+        self._buffers_initialized: dict[str, bool] = {name: False for name in groups}
 
-        # Initialize history buffer if history is configured
-        self.history_buffer: HistoryBuffer | None = None
-        if cfg.history_length > 1:
-            self.history_buffer = HistoryBuffer(obs_dim, cfg.history_length, cfg.flatten_history)
+    @property
+    def active_groups(self) -> list[str]:
+        """Get list of active group names."""
+        return list(self._groups.keys())
 
-        # Current delay (sampled on reset)
-        self._current_delay = 0
+    def get_group_cfg(self, group_name: str) -> ObservationGroupCfg | None:
+        """Get configuration for a specific group."""
+        return self._groups.get(group_name)
 
-    def reset(self, initial_obs: np.ndarray | None = None) -> None:
-        """
-        Reset processor state (call on episode reset).
+    def reset(self, env_ids: torch.Tensor | None = None) -> None:
+        """Reset observation buffers for specified environments.
 
         Args:
-            initial_obs: Initial observation to fill buffers (optional)
+            env_ids: Environment indices to reset. None = all environments.
         """
-        # Sample new delay for this episode
-        self._current_delay = self._rng.integers(
-            self.cfg.global_delay_range[0], self.cfg.global_delay_range[1] + 1
-        )
+        if env_ids is None:
+            env_ids = torch.arange(self._num_envs, device=self._device)
 
-        if initial_obs is not None:
-            # Process initial observation (without delay/history effects)
-            processed_init = self._apply_noise_scale_clip(initial_obs)
+        # Reset delay and history buffers for each group
+        for group_name, group_cfg in self._groups.items():
+            if not self._buffers_initialized.get(group_name, False):
+                continue
 
-            if self.delay_buffer is not None:
-                self.delay_buffer.set_delay(self._current_delay)
-                self.delay_buffer.reset(processed_init)
+            # Compute initial observation for buffer reset
+            obs = self._compute_raw(group_name)
 
-            if self.history_buffer is not None:
-                self.history_buffer.reset(processed_init)
+            # Reset delay buffer
+            delay_buffer = self._delay_buffers.get(group_name)
+            if delay_buffer is not None:
+                # Randomize delay per environment
+                delay_range = group_cfg.delay_range
+                if delay_range[1] > 0:
+                    delays = torch.randint(
+                        delay_range[0], delay_range[1] + 1, (len(env_ids),), device=self._device
+                    )
+                    delay_buffer.set_delay(delays, env_ids)
+                delay_buffer.reset(obs, env_ids)
 
-    def process(self, obs: np.ndarray) -> np.ndarray:
-        """
-        Process observation through the full pipeline.
+            # Reset history buffer
+            history_buffer = self._history_buffers.get(group_name)
+            if history_buffer is not None:
+                history_buffer.reset(obs, env_ids)
+
+    def compute(self, group_name: str) -> torch.Tensor | dict[str, torch.Tensor]:
+        """Compute observations for a specific group.
 
         Args:
-            obs: Raw observation from environment
+            group_name: Name of the observation group (e.g., "policy", "critic").
 
         Returns:
-            Processed observation
+            If concatenate_terms is True: concatenated tensor of shape (num_envs, total_dim).
+            If concatenate_terms is False: dict mapping term names to tensors.
         """
-        # Step 1: Apply noise, scale, clip
-        processed = self._apply_noise_scale_clip(obs)
+        group_cfg = self._groups.get(group_name)
+        if group_cfg is None:
+            raise ValueError(f"Unknown observation group: {group_name}")
 
-        # Step 2: Apply delay
-        if self.delay_buffer is not None:
-            processed = self.delay_buffer.push_and_get(processed)
+        # Compute raw observations (with noise, scale, clip)
+        obs = self._compute_raw(group_name)
 
-        # Step 3: Stack history
-        if self.history_buffer is not None:
-            processed = self.history_buffer.push_and_get(processed)
-
-        return processed
-
-    def _apply_noise_scale_clip(self, obs: np.ndarray) -> np.ndarray:
-        """Apply noise, scaling, and clipping to observation."""
-        result = obs.copy()
-
-        # Apply per-term processing
-        for _term_name, term_cfg in self.cfg.terms.items():
-            start = term_cfg.start_idx
-            end = term_cfg.end_idx if term_cfg.end_idx != -1 else len(result)
-
-            # Extract term slice
-            term_obs = result[start:end]
-
-            # Apply term-specific noise
-            if term_cfg.noise is not None:
-                term_obs = self._apply_noise(term_obs, term_cfg.noise)
-
-            # Apply term-specific scale
-            if term_cfg.scale != 1.0:
-                term_obs = term_obs * term_cfg.scale
-
-            # Apply term-specific clip
-            if term_cfg.clip is not None:
-                term_obs = np.clip(term_obs, term_cfg.clip[0], term_cfg.clip[1])
-
-            # Write back
-            result[start:end] = term_obs
-
-        # Apply global processing
-        if self.cfg.global_noise is not None:
-            result = self._apply_noise(result, self.cfg.global_noise)
-
-        if self.cfg.global_scale != 1.0:
-            result = result * self.cfg.global_scale
-
-        if self.cfg.global_clip is not None:
-            result = np.clip(result, self.cfg.global_clip[0], self.cfg.global_clip[1])
-
-        return result.astype(np.float32)
-
-    def _apply_noise(self, obs: np.ndarray, noise_cfg: NoiseCfg) -> np.ndarray:
-        """Apply noise to observation."""
-        if noise_cfg.type == "none" or (noise_cfg.std == 0.0 and noise_cfg.type == "gaussian"):
+        # If not concatenated, skip delay/history (they expect flat tensor)
+        if not group_cfg.concatenate_terms:
             return obs
 
-        if noise_cfg.type == "gaussian":
-            noise = self._rng.normal(noise_cfg.mean, noise_cfg.std, size=obs.shape)
-            return obs + noise.astype(np.float32)
+        # Initialize buffers on first compute (need obs_dim)
+        if not self._buffers_initialized.get(group_name, False):
+            self._init_buffers(group_name, obs.shape[-1], group_cfg)
+            self._buffers_initialized[group_name] = True
 
-        elif noise_cfg.type == "uniform":
-            noise = self._rng.uniform(noise_cfg.low, noise_cfg.high, size=obs.shape)
-            return obs + noise.astype(np.float32)
+        # Apply delay
+        delay_buffer = self._delay_buffers.get(group_name)
+        if delay_buffer is not None:
+            obs = delay_buffer.push_and_get(obs)
+
+        # Apply history stacking
+        history_buffer = self._history_buffers.get(group_name)
+        if history_buffer is not None:
+            obs = history_buffer.push_and_get(obs)
 
         return obs
 
-    @property
-    def output_dim(self) -> int:
-        """Get output dimension after processing."""
-        if self.history_buffer is not None:
-            return self.history_buffer.output_dim
-        return self.obs_dim
+    def _compute_raw(self, group_name: str) -> torch.Tensor | dict[str, torch.Tensor]:
+        """Compute raw observations with noise, scale, clip (no delay/history)."""
+        group_cfg = self._groups[group_name]
+        observations: dict[str, torch.Tensor] = {}
+
+        for term_name, term_cfg in group_cfg.terms.items():
+            # Compute the observation term
+            obs = self._compute_term(group_name, term_name, term_cfg)
+
+            # Apply noise if corruption is enabled and term has noise config
+            if group_cfg.enable_corruption and term_cfg.noise is not None:
+                obs = term_cfg.noise.apply(obs)
+
+            # Apply scaling
+            if term_cfg.scale != 1.0:
+                obs = obs * term_cfg.scale
+
+            # Apply clipping
+            if term_cfg.clip is not None:
+                obs = torch.clamp(obs, term_cfg.clip[0], term_cfg.clip[1])
+
+            # Ensure 2D shape (num_envs, dim)
+            if obs.dim() == 1:
+                obs = obs.unsqueeze(0)
+
+            observations[term_name] = obs
+
+        if group_cfg.concatenate_terms:
+            return torch.cat(list(observations.values()), dim=-1)
+        return observations
+
+    def _compute_term(
+        self,
+        group_name: str,
+        term_name: str,
+        term_cfg: ObservationTermCfg,
+    ) -> torch.Tensor:
+        """Compute a single observation term."""
+        instance = self._term_instances[group_name].get(term_name)
+
+        if instance is not None:
+            # Class-based term: call the instance
+            obs = instance(self._env, **term_cfg.params)
+        else:
+            # Function-based term: call the function directly
+            obs = term_cfg.func(self._env, **term_cfg.params)
+
+        return obs
+
+    def _init_buffers(self, group_name: str, obs_dim: int, group_cfg: ObservationGroupCfg) -> None:
+        """Initialize delay and history buffers for a group."""
+        # Initialize delay buffer if configured
+        delay_range = group_cfg.delay_range
+        if delay_range[1] > 0:
+            self._delay_buffers[group_name] = DelayBuffer(
+                self._num_envs, obs_dim, delay_range[1], self._device
+            )
+        else:
+            self._delay_buffers[group_name] = None
+
+        # Initialize history buffer if configured
+        history_length = group_cfg.history_length
+        if history_length > 1:
+            self._history_buffers[group_name] = HistoryBuffer(
+                self._num_envs, obs_dim, history_length, self._device, group_cfg.flatten_history
+            )
+        else:
+            self._history_buffers[group_name] = None
+
+    def get_observation_dim(self, group_name: str) -> int:
+        """Get total observation dimension for a group (computes if not cached).
+
+        Args:
+            group_name: Name of the observation group.
+
+        Returns:
+            Total observation dimension (including history if configured).
+        """
+        if group_name in self._group_dims:
+            return self._group_dims[group_name]
+
+        group_cfg = self._groups.get(group_name)
+        if group_cfg is None:
+            return 0
+
+        # Compute observations to determine base dimension
+        obs = self._compute_raw(group_name)
+        if isinstance(obs, torch.Tensor):
+            base_dim = obs.shape[-1]
+        else:
+            base_dim = sum(v.shape[-1] for v in obs.values())
+
+        # Account for history stacking
+        history_length = group_cfg.history_length
+        if history_length > 1 and group_cfg.flatten_history:
+            dim = base_dim * history_length
+        else:
+            dim = base_dim
+
+        self._group_dims[group_name] = dim
+        return dim
+
+
+class NullObservationManager:
+    """Null observation manager when no observations are configured."""
 
     @property
-    def current_delay(self) -> int:
-        """Get current delay setting."""
-        return self._current_delay
+    def active_groups(self) -> list[str]:
+        return []
 
+    def get_group_cfg(self, group_name: str) -> ObservationGroupCfg | None:
+        return None
 
-def create_default_observation_processor(
-    obs_dim: int,
-    noise_std: float = 0.0,
-    delay_range: tuple[int, int] = (0, 0),
-    history_length: int = 1,
-    clip_range: tuple[float, float] | None = None,
-) -> ObservationProcessor:
-    """
-    Create an observation processor with common defaults.
+    def reset(self, env_ids: torch.Tensor | None = None) -> None:
+        pass
 
-    Args:
-        obs_dim: Observation dimension
-        noise_std: Gaussian noise standard deviation (0 = no noise)
-        delay_range: (min, max) delay in steps
-        history_length: Number of observations to stack (1 = no history)
-        clip_range: Optional (low, high) clipping bounds
+    def compute(self, group_name: str) -> torch.Tensor:
+        raise ValueError(f"NullObservationManager cannot compute observations for {group_name}")
 
-    Returns:
-        Configured ObservationProcessor
-    """
-    cfg = ObservationProcessorCfg(
-        global_noise=NoiseCfg(type="gaussian", std=noise_std) if noise_std > 0 else None,
-        global_delay_range=delay_range,
-        global_clip=clip_range,
-        history_length=history_length,
-        flatten_history=True,
-    )
-    return ObservationProcessor(obs_dim, cfg)
+    def get_observation_dim(self, group_name: str) -> int:
+        return 0

@@ -1,194 +1,195 @@
-"""Command manager for generating and resampling velocity commands."""
+"""Command manager for generating and updating commands.
+
+Follows mjlab pattern with class_type-based command terms and multi-env support.
+Uses torch tensors for GPU compatibility.
+"""
+
+from __future__ import annotations
 
 import abc
-from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
+import torch
 
+from .manager_base import ManagerBase, ManagerTermBase
+from .manager_term_config import CommandTermCfg
 
-@dataclass
-class VelocityCommandCfg:
-    """Configuration for velocity command generation."""
-
-    # Linear velocity ranges (m/s)
-    lin_vel_x_range: tuple[float, float] = (-1.0, 1.0)
-    lin_vel_y_range: tuple[float, float] = (-0.5, 0.5)
-
-    # Angular velocity range (rad/s)
-    ang_vel_z_range: tuple[float, float] = (-1.0, 1.0)
-
-    # Heading range (rad) - optional, for heading-based tasks
-    heading_range: tuple[float, float] = (-3.14, 3.14)
-
-    # Resampling interval (seconds)
-    resample_interval_range: tuple[float, float] = (5.0, 10.0)
-
-    # Probability of zero command (standing still)
-    zero_command_prob: float = 0.1
-
-    # Scale factor (can be adjusted by curriculum)
-    scale: float = 1.0
+if TYPE_CHECKING:
+    from ..envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
-class CommandTerm(abc.ABC):
-    """Base class for command generators."""
+class CommandTerm(ManagerTermBase):
+    """Base class for command terms.
 
-    def __init__(self, cfg: object):
+    Command terms generate target values (e.g., velocity commands) that the
+    policy should track. Commands are resampled periodically based on the
+    resampling_time_range in the config.
+    """
+
+    def __init__(self, cfg: CommandTermCfg, env: ManagerBasedRlEnv) -> None:
+        super().__init__(cfg, env)
+        self.cfg: CommandTermCfg = cfg
+        self.metrics: dict[str, torch.Tensor] = {}
+
+        # Time left until next resample for each env
+        self.time_left = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        # Command counter per env
+        self.command_counter = torch.zeros(self.num_envs, dtype=torch.int64, device=self.device)
+
+    @property
+    @abc.abstractmethod
+    def command(self) -> torch.Tensor:
+        """Current command array with shape (num_envs, command_dim)."""
+        raise NotImplementedError
+
+    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, float]:
+        """Reset command state for specified environments."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+
+        extras = {}
+        for metric_name, metric_value in self.metrics.items():
+            extras[metric_name] = float(metric_value[env_ids].mean().item())
+            metric_value[env_ids] = 0.0
+
+        self.command_counter[env_ids] = 0
+        self._resample(env_ids)
+        return extras
+
+    def compute(self, dt: float) -> None:
+        """Update commands for all environments."""
+        self._update_metrics()
+        self.time_left -= dt
+
+        resample_env_ids = torch.where(self.time_left <= 0.0)[0]
+        if len(resample_env_ids) > 0:
+            self._resample(resample_env_ids)
+
+        self._update_command()
+
+    def _resample(self, env_ids: torch.Tensor) -> None:
+        """Resample commands for specified environments."""
+        if len(env_ids) == 0:
+            return
+
+        low, high = self.cfg.resampling_time_range
+        self.time_left[env_ids] = torch.rand(len(env_ids), device=self.device) * (high - low) + low
+
+        self._resample_command(env_ids)
+        self.command_counter[env_ids] += 1
+
+    @abc.abstractmethod
+    def _update_metrics(self) -> None:
+        """Update metrics based on current state."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def _resample_command(self, env_ids: torch.Tensor) -> None:
+        """Resample commands for specified environments."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def _update_command(self) -> None:
+        """Update commands based on current state (called every step)."""
+        raise NotImplementedError
+
+
+class CommandManager(ManagerBase):
+    """Manager for command generation.
+
+    Aggregates multiple command terms and provides unified interface for
+    computing and accessing commands across all environments.
+    """
+
+    _env: ManagerBasedRlEnv
+
+    def __init__(self, cfg: dict[str, Any], env: ManagerBasedRlEnv) -> None:
+        self._terms: dict[str, CommandTerm] = {}
         self.cfg = cfg
-        self._command: np.ndarray | None = None
-        self._time_left: float = 0.0
+        super().__init__(env)
+
+    def __str__(self) -> str:
+        msg = f"<CommandManager> contains {len(self._terms)} active terms.\n"
+        msg += "Active Command Terms:\n"
+        msg += f"{'Index':<8} {'Name':<30} {'Type':<30}\n"
+        msg += "-" * 70 + "\n"
+        for idx, (name, term) in enumerate(self._terms.items()):
+            msg += f"{idx:<8} {name:<30} {term.__class__.__name__:<30}\n"
+        return msg
 
     @property
-    @abc.abstractmethod
-    def command(self) -> np.ndarray:
-        """Current command vector."""
-        raise NotImplementedError
+    def active_terms(self) -> list[str]:
+        """Get list of active term names."""
+        return list(self._terms.keys())
 
-    @property
-    @abc.abstractmethod
-    def dim(self) -> int:
-        """Dimension of command vector."""
-        raise NotImplementedError
+    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, float]:
+        """Reset commands for specified environments."""
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
 
-    @abc.abstractmethod
-    def resample(self) -> None:
-        """Sample a new command."""
-        raise NotImplementedError
+        extras = {}
+        for name, term in self._terms.items():
+            metrics = term.reset(env_ids)
+            for metric_name, metric_value in metrics.items():
+                extras[f"Metrics/{name}/{metric_name}"] = metric_value
+        return extras
 
-    @abc.abstractmethod
-    def reset(self) -> None:
-        """Reset command state (called on episode reset)."""
-        raise NotImplementedError
+    def compute(self, dt: float) -> None:
+        """Update all command terms."""
+        for term in self._terms.values():
+            term.compute(dt)
 
-    def update(self, dt: float) -> None:
-        """Update command state (called every step)."""
-        self._time_left -= dt
-        if self._time_left <= 0:
-            self.resample()
+    def get_command(self, name: str) -> torch.Tensor:
+        """Get command array for a term."""
+        return self._terms[name].command
 
+    def get_term(self, name: str) -> CommandTerm:
+        """Get a command term by name."""
+        return self._terms[name]
 
-class VelocityCommand(CommandTerm):
-    """
-    Velocity command generator for locomotion tasks.
+    def get_active_iterable_terms(self, env_idx: int = 0) -> list[tuple[str, list[float]]]:
+        """Get term values for iteration/logging."""
+        terms = []
+        for name, term in self._terms.items():
+            terms.append((name, term.command[env_idx].tolist()))
+        return terms
 
-    Generates commands: [vx, vy, wz, heading]
-    """
+    def _prepare_terms(self) -> None:
+        """Parse configuration and instantiate command terms."""
+        for term_name, term_cfg in self.cfg.items():
+            if term_cfg is None:
+                continue
 
-    def __init__(self, cfg: VelocityCommandCfg):
-        super().__init__(cfg)
-        self.cfg: VelocityCommandCfg = cfg
-        self._command = np.zeros(4, dtype=np.float32)
-        self._resample_interval()
-        self.resample()
-
-    @property
-    def command(self) -> np.ndarray:
-        return self._command
-
-    @property
-    def dim(self) -> int:
-        return 4
-
-    def resample(self) -> None:
-        """Sample a new velocity command."""
-        cfg = self.cfg
-
-        # Check for zero command
-        if np.random.random() < cfg.zero_command_prob:
-            self._command = np.zeros(4, dtype=np.float32)
-        else:
-            self._command = np.array(
-                [
-                    np.random.uniform(*cfg.lin_vel_x_range) * cfg.scale,
-                    np.random.uniform(*cfg.lin_vel_y_range) * cfg.scale,
-                    np.random.uniform(*cfg.ang_vel_z_range) * cfg.scale,
-                    np.random.uniform(*cfg.heading_range),
-                ],
-                dtype=np.float32,
-            )
-
-        self._resample_interval()
-
-    def _resample_interval(self) -> None:
-        """Sample a new resample interval."""
-        self._time_left = np.random.uniform(*self.cfg.resample_interval_range)
-
-    def reset(self) -> None:
-        """Reset command on episode start."""
-        self.resample()
-
-    def set_velocity_range(self, max_velocity: float) -> None:
-        """
-        Update velocity ranges (for curriculum learning).
-
-        Args:
-            max_velocity: Maximum velocity magnitude
-        """
-        self.cfg.lin_vel_x_range = (-max_velocity, max_velocity)
-        self.cfg.lin_vel_y_range = (-max_velocity * 0.5, max_velocity * 0.5)
-        self.cfg.ang_vel_z_range = (-max_velocity, max_velocity)
-
-    def set_scale(self, scale: float) -> None:
-        """Set command scale (for curriculum learning)."""
-        self.cfg.scale = scale
+            term = term_cfg.class_type(term_cfg, self._env)
+            if not isinstance(term, CommandTerm):
+                raise TypeError(
+                    f"Returned object for term '{term_name}' is not a CommandTerm. Got: {type(term).__name__}"
+                )
+            self._terms[term_name] = term
 
 
-class CommandManager:
-    """
-    Manages multiple command generators.
+class NullCommandManager:
+    """Placeholder for absent command manager that safely no-ops all operations."""
 
-    Provides a unified interface for command generation and updates.
-    """
+    def __init__(self) -> None:
+        self.active_terms: list[str] = []
+        self._terms: dict[str, Any] = {}
+        self.cfg = None
 
-    def __init__(self):
-        self._commands: dict[str, CommandTerm] = {}
+    def __str__(self) -> str:
+        return "<NullCommandManager> (inactive)"
 
-    def add_command(self, name: str, command: CommandTerm) -> None:
-        """Add a command generator."""
-        self._commands[name] = command
+    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, float]:
+        return {}
 
-    def get_command(self, name: str) -> np.ndarray:
-        """Get current command by name."""
-        if name not in self._commands:
-            raise KeyError(f"Command '{name}' not found. Available: {list(self._commands.keys())}")
-        return self._commands[name].command
+    def compute(self, dt: float) -> None:
+        pass
 
-    def get_all_commands(self) -> dict[str, np.ndarray]:
-        """Get all current commands."""
-        return {name: cmd.command for name, cmd in self._commands.items()}
+    def get_command(self, name: str) -> None:
+        return None
 
-    def update(self, dt: float) -> None:
-        """Update all commands (call every step)."""
-        for cmd in self._commands.values():
-            cmd.update(dt)
+    def get_term(self, name: str) -> None:
+        return None
 
-    def reset(self) -> None:
-        """Reset all commands (call on episode reset)."""
-        for cmd in self._commands.values():
-            cmd.reset()
-
-    def resample(self, name: str | None = None) -> None:
-        """
-        Force resample command(s).
-
-        Args:
-            name: Command name to resample, or None for all
-        """
-        if name is not None:
-            self._commands[name].resample()
-        else:
-            for cmd in self._commands.values():
-                cmd.resample()
-
-    @property
-    def command_dims(self) -> dict[str, int]:
-        """Get dimensions of all commands."""
-        return {name: cmd.dim for name, cmd in self._commands.items()}
-
-    def __getitem__(self, name: str) -> CommandTerm:
-        """Get command term by name."""
-        return self._commands[name]
-
-    def __contains__(self, name: str) -> bool:
-        """Check if command exists."""
-        return name in self._commands
+    def get_active_iterable_terms(self, env_idx: int = 0) -> list[tuple[str, list[float]]]:
+        return []

@@ -6,11 +6,39 @@ showing per-iteration metrics including losses, rewards, and timing information.
 
 from __future__ import annotations
 
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# ANSI color codes
+COLORS = {
+    "green": "\033[92m",
+    "red": "\033[91m",
+    "yellow": "\033[93m",
+    "blue": "\033[94m",
+    "cyan": "\033[96m",
+    "magenta": "\033[95m",
+    "white": "\033[97m",
+    "gray": "\033[90m",
+    "bold": "\033[1m",
+    "dim": "\033[2m",
+    "reset": "\033[0m",
+}
+
+
+def _supports_color() -> bool:
+    """Check if terminal supports color output."""
+    return sys.stdout.isatty()
+
+
+def _c(text: str, color: str) -> str:
+    """Colorize text if terminal supports it."""
+    if _supports_color() and color in COLORS:
+        return f"{COLORS[color]}{text}{COLORS['reset']}"
+    return text
 
 
 @dataclass
@@ -32,8 +60,8 @@ class IterationLoggerCfg:
     """Window size for computing mean episode statistics."""
 
     # Backend settings
-    logger: str = "tensorboard"
-    """Logger backend: 'tensorboard', 'wandb', or 'none'."""
+    logger: str = "wandb"
+    """Logger backend: 'wandb' or 'none'."""
 
     wandb_project: str = "luckylab"
     """Wandb project name."""
@@ -120,7 +148,7 @@ class IterationLogger:
         except ImportError:
             print("Warning: tensorboard not installed, disabling tensorboard logging")
 
-    def _init_wandb(self) -> None:
+    def _init_wandb(self, config: dict | None = None) -> None:
         """Initialize Weights & Biases."""
         try:
             import wandb
@@ -130,9 +158,17 @@ class IterationLogger:
                 entity=self.cfg.wandb_entity,
                 name=self.cfg.experiment_name,
                 dir=str(self.log_dir) if self.log_dir else None,
+                config=config,
             )
         except ImportError:
             print("Warning: wandb not installed, disabling wandb logging")
+
+    def log_config(self, config: dict) -> None:
+        """Log hyperparameters/config to wandb."""
+        if self._wandb_run:
+            import wandb
+
+            wandb.config.update(config, allow_val_change=True)
 
     def log_iteration(
         self,
@@ -255,37 +291,53 @@ class IterationLogger:
         iteration_time: float,
         env_metrics: dict[str, float] | None,
     ) -> None:
-        """Print iteration summary to console."""
+        """Print iteration summary to console with colors."""
         elapsed = time.time() - self.start_time
         remaining_iterations = self.max_iterations - iteration
         eta = (elapsed / max(iteration, 1)) * remaining_iterations if iteration > 0 else 0
+        progress_pct = (iteration / self.max_iterations) * 100
 
         # Header
         print()
-        print("#" * 80)
-        print(f" Learning iteration {iteration}/{self.max_iterations} ")
-        print()
+        print(_c("=" * 80, "blue"))
+        progress_str = f"{progress_pct:.1f}%"
+        header = f"Learning iteration {_c(str(iteration), 'bold')}/{self.max_iterations} [{_c(progress_str, 'cyan')}]"
+        # Center the header
+        padding = (80 - len(f"Learning iteration {iteration}/{self.max_iterations} [{progress_str}]")) // 2
+        print(" " * padding + header)
+        print(_c("=" * 80, "blue"))
 
-        # Computation
-        print(
-            f"{'Computation:':<40} {fps:.0f} steps/s (collection: {collection_time:.3f}s, learning {learn_time:.3f}s)"
-        )
+        # Computation section
+        print()
+        print(_c("  Computation", "bold"))
+        fps_color = "green" if fps > 100 else "yellow" if fps > 50 else "red"
+        print(f"    Steps/sec:                       {_c(f'{fps:.0f}', fps_color)}")
+        print(f"    Collection time:                 {_c(f'{collection_time:.3f}s', 'dim')}")
+        if learn_time > 0:
+            print(f"    Learning time:                   {_c(f'{learn_time:.3f}s', 'dim')}")
 
         # Action std
         if action_std is not None:
-            print(f"{'Mean action noise std:':<40} {action_std:.2f}")
+            print(f"    Action noise std:                {_c(f'{action_std:.4f}', 'cyan')}")
 
-        # Losses
-        for name, value in sorted(losses.items()):
-            print(f"{'Mean ' + name + ' loss:':<40} {value:.4f}")
+        # Losses section
+        if losses:
+            print()
+            print(_c("  Losses", "bold"))
+            for name, value in sorted(losses.items()):
+                # Shorten the name for cleaner display
+                short_name = name.replace("Loss / ", "").replace(" loss", "")
+                print(f"    {short_name + ':':<32} {_c(f'{value:.6f}', 'magenta')}")
 
-        # Episode stats
-        print(f"{'Mean reward:':<40} {mean_reward:.2f}")
-        print(f"{'Mean episode length:':<40} {mean_length:.1f}")
+        # Episode stats section
+        print()
+        print(_c("  Episode Stats", "bold"))
+        reward_color = "green" if mean_reward > 0 else "red"
+        print(f"    Mean reward:                     {_c(f'{mean_reward:.2f}', reward_color)}")
+        print(f"    Mean episode length:             {_c(f'{mean_length:.1f}', 'cyan')}")
 
         # Environment metrics (grouped by prefix)
         if env_metrics:
-            # Group by prefix
             groups: dict[str, list[tuple[str, float]]] = {}
             for name, value in sorted(env_metrics.items()):
                 if "/" in name:
@@ -294,20 +346,21 @@ class IterationLogger:
                         groups[prefix] = []
                     groups[prefix].append((suffix, value))
 
-            # Print grouped metrics
             for group_name, group_metrics in sorted(groups.items()):
-                if group_name not in ("Episode", "Time", "Rolling"):  # Skip standard groups
+                if group_name not in ("Episode", "Time", "Rolling"):
                     print()
-                    print(f"  [{group_name}]")
+                    print(_c(f"  {group_name}", "bold"))
                     for name, value in group_metrics:
-                        print(f"    {name + ':':<36} {value:.4f}")
+                        print(f"    {name + ':':<32} {_c(f'{value:.4f}', 'cyan')}")
 
-        # Footer
-        print("-" * 80)
-        print(f"{'Total timesteps:':<40} {self.total_timesteps}")
-        print(f"{'Iteration time:':<40} {iteration_time:.2f}s")
-        print(f"{'Time elapsed:':<40} {self._format_time(elapsed)}")
-        print(f"{'ETA:':<40} {self._format_time(eta)}")
+        # Footer with timing
+        print()
+        print(_c("-" * 80, "dim"))
+        print(f"    Total timesteps:                 {_c(f'{self.total_timesteps:,}', 'bold')}")
+        print(f"    Iteration time:                  {_c(f'{iteration_time:.2f}s', 'dim')}")
+        print(f"    Elapsed:                         {_c(self._format_time(elapsed), 'cyan')}")
+        if eta >= 0:
+            print(f"    ETA:                             {_c(self._format_time(eta), 'green')}")
 
     def _format_time(self, seconds: float) -> str:
         """Format seconds as HH:MM:SS."""
@@ -386,17 +439,34 @@ class IterationLogger:
 
             wandb.finish()
 
-        # Print final summary
+        # Print final summary with colors
         elapsed = time.time() - self.start_time
+        avg_steps_per_iter = self.total_timesteps / max(self.current_iteration, 1)
+
         print()
-        print("=" * 80)
-        print(" Training Complete ")
-        print("=" * 80)
-        print(f"{'Total iterations:':<40} {self.current_iteration}")
-        print(f"{'Total timesteps:':<40} {self.total_timesteps}")
-        print(f"{'Total time:':<40} {self._format_time(elapsed)}")
-        print(f"{'Average FPS:':<40} {self.total_timesteps / elapsed:.0f}" if elapsed > 0 else "")
+        print(_c("=" * 80, "green"))
+        complete_text = "Training Complete"
+        padding = (80 - len(complete_text)) // 2
+        print(" " * padding + _c(complete_text, "green"))
+        print(_c("=" * 80, "green"))
+        print()
+        print(_c("  Summary", "bold"))
+        print(f"    Total iterations:                {_c(f'{self.current_iteration:,}', 'bold')}")
+        print(f"    Total timesteps:                 {_c(f'{self.total_timesteps:,}', 'bold')}")
+        print(f"    Avg steps/iteration:             {_c(f'{avg_steps_per_iter:.1f}', 'cyan')}")
+        print(f"    Total time:                      {_c(self._format_time(elapsed), 'cyan')}")
+        if elapsed > 0:
+            print(
+                f"    Average FPS:                     {_c(f'{self.total_timesteps / elapsed:.0f}', 'green')}"
+            )
+
         if self._episode_rewards:
-            print(f"{'Final mean reward:':<40} {self.get_mean_reward():.2f}")
-            print(f"{'Final mean episode length:':<40} {self.get_mean_length():.1f}")
-        print("=" * 80)
+            print()
+            print(_c("  Final Episode Stats", "bold"))
+            reward_color = "green" if self.get_mean_reward() > 0 else "red"
+            print(f"    Mean reward:                     {_c(f'{self.get_mean_reward():.2f}', reward_color)}")
+            print(f"    Mean episode length:             {_c(f'{self.get_mean_length():.1f}', 'cyan')}")
+            print(f"    Total episodes:                  {_c(f'{len(self._episode_rewards)}', 'cyan')}")
+
+        print()
+        print(_c("=" * 80, "green"))

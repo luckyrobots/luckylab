@@ -28,6 +28,7 @@ dependencies = [
     "numpy>=1.24.0",
     "torch>=2.0.0",
     "skrl>=1.3.0",
+    "wandb>=0.24.1",
 ]
 
 [project.optional-dependencies]
@@ -63,6 +64,9 @@ Issues = "https://github.com/luckyrobots/luckylab/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/luckylab"]
+
+[tool.uv.sources]
+luckyrobots = { path = "../../core/luckyrobots", editable = true }
 
 [dependency-groups]
 dev = [

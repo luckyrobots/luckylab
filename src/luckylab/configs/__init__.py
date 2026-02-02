@@ -1,5 +1,3 @@
 """Configuration classes for luckylab."""
 
-from .domain_randomization import PhysicsDRCfg
-
-__all__ = ["PhysicsDRCfg"]
+from luckylab.configs.domain_randomization import PhysicsDRCfg as PhysicsDRCfg

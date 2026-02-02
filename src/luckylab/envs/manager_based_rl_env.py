@@ -3,21 +3,24 @@
 This module defines both the configuration and implementation for manager-based
 RL environments, following the mjlab pattern where all MDP components are
 config-driven with direct function references.
+
+Uses torch tensors for GPU compatibility.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
-import gymnasium as gym
-import numpy as np
-from gymnasium import spaces
+import torch
 from luckyrobots import LuckyRobots, ObservationResponse
 
 from ..configs.domain_randomization import PhysicsDRCfg
-from ..managers.command_manager import CommandManager, VelocityCommand
-from ..managers.curriculum_manager import CurriculumTermManager, EpisodeMetrics
+from ..entity import Entity, EntityCfg, Scene
+from ..managers.action_manager import ActionManager, NullActionManager
+from ..managers.command_manager import CommandManager, NullCommandManager
+from ..managers.curriculum_manager import CurriculumManager, EpisodeMetrics, NullCurriculumManager
 from ..managers.manager_term_config import (
     ActionTermCfg,
     CommandTermCfg,
@@ -26,7 +29,7 @@ from ..managers.manager_term_config import (
     RewardTermCfg,
     TerminationTermCfg,
 )
-from ..managers.observation_manager import ObservationProcessor, ObservationProcessorCfg
+from ..managers.observation_manager import ObservationManager
 from ..managers.reward_manager import RewardManager
 from ..managers.termination_manager import TerminationManager
 
@@ -47,6 +50,10 @@ class ManagerBasedRlEnvCfg:
     # Required fields (no defaults, must be provided).
     decimation: int
     """Number of simulation steps per environment step."""
+
+    # Multi-environment settings.
+    num_envs: int = 1
+    """Number of parallel environments."""
 
     # Scene and robot (luckyrobots-specific).
     scene: str = "velocity"
@@ -101,15 +108,8 @@ class ManagerBasedRlEnvCfg:
     curriculum: dict[str, CurriculumTermCfg] | None = None
     """Curriculum terms: name -> config. None = no curriculum."""
 
-    # Note: EventTermCfg is not used here because domain randomization
-    # (physics params like mass, friction) must be done engine-side via gRPC.
-    # When the engine exposes DR endpoints, we can add event support.
-
-    # Domain randomization (luckyrobots-specific).
     physics_dr: PhysicsDRCfg = field(default_factory=PhysicsDRCfg)
     """Physics domain randomization config."""
-    observation_dr: ObservationProcessorCfg = field(default_factory=ObservationProcessorCfg)
-    """Observation domain randomization/processing config."""
 
     # Derived properties.
     @property
@@ -123,54 +123,114 @@ class ManagerBasedRlEnvCfg:
         return self.sim_dt * self.decimation
 
 
-class ManagerBasedRlEnv(gym.Env):
+class ManagerBasedRlEnv:
     """Manager-based RL environment for LuckyRobots.
 
-    This environment connects to LuckyRobots via gRPC and provides a standard
-    Gymnasium interface. All behavior (rewards, terminations, etc.) is driven
-    by the provided configuration following the mjlab pattern.
+    This environment connects to LuckyRobots via gRPC and provides a torch-native
+    interface. All behavior (rewards, terminations, etc.) is driven by the provided
+    configuration following the mjlab pattern.
 
     Rewards and terminations are defined as dicts mapping names to configs.
     Each config specifies a function reference and parameters.
+
+    Returns torch tensors for all outputs.
     """
 
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
-
-    def __init__(self, cfg: ManagerBasedRlEnvCfg) -> None:
+    def __init__(self, cfg: ManagerBasedRlEnvCfg, device: str = "cpu") -> None:
         """Initialize the environment.
 
         Args:
             cfg: Environment configuration.
+            device: Torch device for computation.
         """
-        super().__init__()
         self.cfg = cfg
         self.render_mode = cfg.render_mode
+        self._num_envs = cfg.num_envs
+        self._device = torch.device(device)
 
         # Initialize LuckyRobots connection
         self.luckyrobots = LuckyRobots(host=cfg.host, port=cfg.port)
 
-        # Episode state
-        self.step_count = 0
+        # Episode state (per-env tensors for multi-env support)
+        self.step_count = torch.zeros(self._num_envs, dtype=torch.int64, device=self._device)
         self.common_step_counter = 0  # Total steps across all episodes (for curriculum)
-        self.current_action: np.ndarray | None = None
-        self.last_action: np.ndarray | None = None
+        self.current_action: torch.Tensor | None = None
+        self.last_action: torch.Tensor | None = None
         self.latest_observation: ObservationResponse | None = None
+
+        # Schema info (populated after connection)
+        self._observation_names: list[str] | None = None
+        self._engine_observation_size: int = 0
+        self._command_dim: int = 4  # Commands from LuckyLab CommandManager
 
         # Get robot config for joint information
         robot_config = LuckyRobots.get_robot_config(cfg.robot)
         action_limits = robot_config["action_space"]["actuator_limits"]
         self.num_joints = len(action_limits)
-        self.action_low = np.array([limit["lower"] for limit in action_limits], dtype=np.float32)
-        self.action_high = np.array([limit["upper"] for limit in action_limits], dtype=np.float32)
+        self.action_low = torch.tensor(
+            [limit["lower"] for limit in action_limits], dtype=torch.float32, device=self._device
+        )
+        self.action_high = torch.tensor(
+            [limit["upper"] for limit in action_limits], dtype=torch.float32, device=self._device
+        )
 
-        # Initialize observation parser (import here to avoid circular import)
-        from ..tasks.velocity.mdp import ObservationParser
+        # Connect to LuckyRobots and fetch schema FIRST to get actual observation size
+        self._start_or_connect()
+        self._fetch_observation_schema()
 
-        self.obs_parser = ObservationParser(self.num_joints)
+        # Initialize scene with robot entity (mjlab pattern: env.scene["robot"].data.*)
+        joint_names = self._get_joint_names()
+        self.scene = Scene()
+        robot_entity = Entity(
+            cfg=EntityCfg(),
+            num_envs=self._num_envs,
+            num_joints=self.num_joints,
+            joint_names=joint_names,
+            device=self._device,
+        )
+        self.scene.add("robot", robot_entity)
 
-        # Initialize command manager
-        self.command_manager = CommandManager()
-        self.command_manager.add_command("velocity", VelocityCommand(cfg.commands))
+        # Set default joint positions from robot config
+        # This is used by JointPositionAction when use_default_offset=True
+        default_positions = [
+            limit.get("default", 0.0) for limit in robot_config["action_space"]["actuator_limits"]
+        ]
+        robot_entity.data.set_default_joint_pos(default_positions)
+        logger.info(f"Default joint positions: {default_positions}")
+
+        # Validate which observations are available from the engine
+        # This logs warnings for missing privileged observations (foot sensors, etc.)
+        if self._observation_names:
+            robot_entity.data.validate_observations(self._observation_names)
+
+        # Calculate fallback policy observation size (used if no observation manager):
+        # [commands (from CommandManager)] + [engine_state] + [last_act (from ActionManager)]
+        policy_obs_size = self._command_dim + self._engine_observation_size + self.num_joints
+        logger.info(
+            f"Fallback observation size: {policy_obs_size} "
+            f"(commands={self._command_dim} + engine={self._engine_observation_size} + last_act={self.num_joints})"
+        )
+
+        # Setup spaces with fallback observation size (may be updated by observation manager)
+        self._setup_spaces(robot_config, policy_obs_size)
+
+        # Initialize action manager for action processing (raw → joint positions)
+        # Uses mjlab pattern: actions dict with ActionTermCfg containing class_type
+        if cfg.actions:
+            self.action_manager = ActionManager(cfg.actions, self)
+            logger.info(f"Action manager: {self.action_manager.active_terms} ({self.action_manager.total_action_dim} dims)")
+        else:
+            self.action_manager = NullActionManager(self.num_joints, self._num_envs, self._device)
+            logger.info("Action manager: disabled (no actions config)")
+
+        # Initialize command manager using mjlab pattern (class_type instantiation)
+        # Must be done after connection so we have num_envs properly set up
+        if cfg.commands:
+            self.command_manager = CommandManager(cfg.commands, self)
+            logger.info(f"Command manager: {self.command_manager.active_terms}")
+        else:
+            self.command_manager = NullCommandManager()
+            logger.info("Command manager: disabled (no commands config)")
 
         # Initialize reward manager (if reward terms are defined)
         self.reward_manager: RewardManager | None = None
@@ -184,15 +244,40 @@ class ManagerBasedRlEnv(gym.Env):
             self.termination_manager = TerminationManager(cfg.terminations, self)
             logger.info(f"Termination manager: {len(self.termination_manager.active_terms)} terms")
 
-        # Note: EventManager is not initialized here because domain randomization
-        # requires engine-side support via gRPC. When DR endpoints are available,
-        # event-based randomization can be added.
-
         # Initialize curriculum manager (if curriculum terms are defined)
-        self.curriculum_manager: CurriculumTermManager | None = None
+        self.curriculum_manager: CurriculumManager | NullCurriculumManager
         if cfg.curriculum:
-            self.curriculum_manager = CurriculumTermManager(cfg.curriculum)
-            logger.info("Curriculum learning enabled")
+            self.curriculum_manager = CurriculumManager(cfg.curriculum, self)
+            logger.info(f"Curriculum manager: {len(self.curriculum_manager.active_terms)} terms")
+        else:
+            self.curriculum_manager = NullCurriculumManager()
+            logger.info("Curriculum manager: disabled (no curriculum config)")
+
+        # Initialize observation manager (required)
+        if not cfg.observations:
+            raise ValueError(
+                "observations config is required. Define observation groups in your environment config."
+            )
+        self.observation_manager = ObservationManager(cfg.observations, self)
+        logger.info(f"Observation manager: {self.observation_manager.active_groups} groups")
+
+        # Update observation space with actual computed dimension
+        try:
+            policy_obs_dim = self.observation_manager.get_observation_dim("policy")
+            self._obs_shape = (policy_obs_dim,)
+            if self.observation_space is not None:
+                import numpy as np
+                from gymnasium import spaces
+
+                self.observation_space = spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(policy_obs_dim,),
+                    dtype=np.float32,
+                )
+            logger.info(f"Updated observation space: dim={policy_obs_dim}")
+        except Exception as e:
+            logger.warning(f"Could not compute observation dimension: {e}")
 
         # Episode metrics tracking
         self.episode_metrics = EpisodeMetrics()
@@ -202,20 +287,7 @@ class ManagerBasedRlEnv(gym.Env):
         self.task_name = cfg.task.replace("_", " ").title().replace(" ", "")
 
         # Extras dict for logging (mjlab pattern)
-        # This is populated on reset with episode statistics
         self.extras: dict = {"log": {}}
-
-        # Initialize observation processor for observation DR
-        obs_config = robot_config["observation_space"]["actuator_limits"]
-        obs_dim = len(obs_config)
-        self.observation_processor = ObservationProcessor(obs_dim, cfg.observation_dr)
-        self._obs_processor_initialized = False
-
-        # Setup spaces
-        self._setup_spaces(robot_config)
-
-        # Connect to LuckyRobots
-        self._start_or_connect()
 
         # Log configured rewards and terminations
         if cfg.rewards:
@@ -223,25 +295,79 @@ class ManagerBasedRlEnv(gym.Env):
         if cfg.terminations:
             logger.info(f"Configured terminations: {list(cfg.terminations.keys())}")
 
-    def _setup_spaces(self, robot_config: dict) -> None:
-        """Set up action and observation spaces."""
+    @property
+    def num_envs(self) -> int:
+        """Number of parallel environments."""
+        return self._num_envs
+
+    @property
+    def device(self) -> torch.device:
+        """Device for computation."""
+        return self._device
+
+    @property
+    def observation_space_shape(self) -> tuple[int, ...]:
+        """Shape of the observation space."""
+        return self._obs_shape
+
+    @property
+    def action_space_shape(self) -> tuple[int, ...]:
+        """Shape of the action space."""
+        return self._action_shape
+
+    def _setup_spaces(self, robot_config: dict, obs_dim: int) -> None:
+        """Set up action and observation space shapes.
+
+        Args:
+            robot_config: Robot configuration dict.
+            obs_dim: Observation dimension (from schema or fallback).
+        """
         action_limits = robot_config["action_space"]["actuator_limits"]
         action_dim = len(action_limits)
 
-        self.action_space = spaces.Box(
-            low=np.array([limit["lower"] for limit in action_limits], dtype=np.float32),
-            high=np.array([limit["upper"] for limit in action_limits], dtype=np.float32),
-            shape=(action_dim,),
-            dtype=np.float32,
-        )
+        self._action_shape = (action_dim,)
+        self._obs_shape = (obs_dim,)
 
-        obs_dim = self.observation_processor.output_dim
-        self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(obs_dim,),
-            dtype=np.float32,
-        )
+        # Keep gymnasium-compatible spaces for wrapper compatibility
+        try:
+            import gymnasium as gym
+            import numpy as np
+            from gymnasium import spaces
+
+            # When actions are configured, policy outputs normalized [-1, 1] actions
+            # The ActionManager converts these to actual joint positions
+            if self.cfg.actions:
+                self.action_space = spaces.Box(
+                    low=-1.0,
+                    high=1.0,
+                    shape=(action_dim,),
+                    dtype=np.float32,
+                )
+            else:
+                # Fallback to raw joint position limits
+                self.action_space = spaces.Box(
+                    low=np.array([limit["lower"] for limit in action_limits], dtype=np.float32),
+                    high=np.array([limit["upper"] for limit in action_limits], dtype=np.float32),
+                    shape=(action_dim,),
+                    dtype=np.float32,
+                )
+
+            self.observation_space = spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(obs_dim,),
+                dtype=np.float32,
+            )
+        except ImportError:
+            # gymnasium not installed, spaces won't be available
+            self.action_space = None
+            self.observation_space = None
+
+    def _get_joint_names(self) -> list[str]:
+        """Get joint names from robot config."""
+        robot_config = LuckyRobots.get_robot_config(self.cfg.robot)
+        action_limits = robot_config["action_space"]["actuator_limits"]
+        return [limit.get("name", f"joint_{i}") for i, limit in enumerate(action_limits)]
 
     def _start_or_connect(self) -> None:
         """Launch LuckyEngine or connect to existing instance."""
@@ -257,38 +383,71 @@ class ManagerBasedRlEnv(gym.Env):
                 timeout_s=self.cfg.timeout_s,
             )
 
-    def _convert_observation(self, observation: ObservationResponse) -> np.ndarray:
-        """Convert ObservationResponse to flat numpy array."""
-        if observation.observation:
-            obs = np.array(observation.observation, dtype=np.float32)
-            expected_size = self.observation_space.shape[0]
-            if len(obs) >= expected_size:
-                obs = obs[:expected_size]
-            else:
-                padded = np.zeros(expected_size, dtype=np.float32)
-                padded[: len(obs)] = obs
-                obs = padded
-            return np.clip(obs, self.observation_space.low, self.observation_space.high)
-        return np.zeros(self.observation_space.shape, dtype=np.float32)
+        # Set simulation mode to "fast" for RL training (runs physics as fast as possible)
+        self.luckyrobots.set_simulation_mode("fast")
+        logger.info("Set simulation mode to 'fast' for RL training")
 
-    def reset(self, seed: int | None = None, options: dict | None = None) -> tuple[np.ndarray, dict]:
+    def _fetch_observation_schema(self) -> None:
+        """Fetch observation schema from engine (required).
+
+        The schema contains observation_names and observation_size from the engine.
+        Engine observations no longer include commands or last_act - those are
+        managed by LuckyLab's CommandManager and ActionManager respectively.
+
+        Raises:
+            RuntimeError: If schema cannot be fetched from engine.
+        """
+        if self.luckyrobots.engine_client is None:
+            raise RuntimeError(
+                "Cannot fetch observation schema: engine client not connected. "
+                "Ensure LuckyEngine is running and connection is established."
+            )
+
+        try:
+            schema_resp = self.luckyrobots.engine_client.get_agent_schema()
+            if not hasattr(schema_resp, "schema") or not schema_resp.schema:
+                raise RuntimeError("Engine returned empty schema response.")
+
+            self._observation_names = list(schema_resp.schema.observation_names)
+            self._engine_observation_size = schema_resp.schema.observation_size
+
+            logger.info(
+                f"Fetched observation schema: {len(self._observation_names)} names, "
+                f"engine_observation_size={self._engine_observation_size}"
+            )
+            logger.info(f"Observation names: {self._observation_names}")
+
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to fetch observation schema from engine: {e}. "
+                "Ensure LuckyEngine is running with a valid agent."
+            ) from e
+
+    def reset(self, seed: int | None = None, options: dict | None = None) -> tuple[torch.Tensor, dict]:
         """Reset the environment.
 
         On reset, the extras["log"] dict is populated with episode statistics
         from all managers. This follows the mjlab pattern for logging.
+
+        Returns:
+            Tuple of (observation tensor, info dict).
         """
-        super().reset(seed=seed, options=options)
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        # For single-env, use env_idx=0. Multi-env would reset specific envs.
+        env_ids = torch.tensor([0], dtype=torch.long, device=self._device)
 
         # Initialize log dict for this reset (mjlab pattern)
         self.extras["log"] = {}
 
         # Collect episode stats from managers before resetting
         if self.reward_manager is not None:
-            info = self.reward_manager.reset()
+            info = self.reward_manager.reset(env_ids)
             self.extras["log"].update(info)
 
         if self.termination_manager is not None:
-            info = self.termination_manager.reset()
+            info = self.termination_manager.reset(env_ids)
             self.extras["log"].update(info)
 
         # Add episode-level metrics before resetting
@@ -304,204 +463,158 @@ class ManagerBasedRlEnv(gym.Env):
         self.episode_count += 1
 
         # Update curriculum based on step count (mjlab pattern)
-        if self.curriculum_manager is not None:
-            self.curriculum_manager.update(self)
+        self.curriculum_manager.compute(env_ids)
 
         # Reset episode state
-        self.step_count = 0
+        self.step_count[env_ids] = 0
         self.current_action = None
         self.last_action = None
         self.episode_metrics.reset()
-        self.command_manager.reset()
+        self.action_manager.reset(env_ids)
+        self.command_manager.reset(env_ids)
 
-        # Reset environment via gRPC
-        observation = self.luckyrobots.reset()
+        # Reset environment via gRPC with domain randomization
+        observation = self.luckyrobots.reset(randomization_cfg=self.cfg.physics_dr)
         self.latest_observation = observation
 
-        # Reset observation processor
+        # Update entity data from observation for observation functions
         if observation.observation:
-            raw_obs = np.array(observation.observation, dtype=np.float32)
-            self.observation_processor.reset(raw_obs)
-            self._obs_processor_initialized = True
+            obs_tensor = torch.tensor(observation.observation, dtype=torch.float32, device=self._device)
+            self.scene["robot"].data.update_from_observation(obs_tensor, self._observation_names)
 
-        obs = self._convert_observation(observation)
+        # Reset observation manager buffers (delay/history)
+        self.observation_manager.reset(env_ids)
+
+        # Compute observation using observation manager
+        obs = self.observation_manager.compute("policy")
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0)  # Ensure (num_envs, obs_dim) shape
 
         # Build info dict with command and log reference
+        cmd = self.command_manager.get_command("twist")
+        cmd_list = (
+            cmd[0].tolist()
+            if cmd is not None and cmd.dim() == 2
+            else (cmd.tolist() if cmd is not None else [])
+        )
         info = {
-            "command": self.command_manager.get_command("velocity").tolist(),
+            "command": cmd_list,
             "log": self.extras["log"],
         }
 
         return obs, info
 
-    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]:
-        """Execute one step in the environment."""
-        self.step_count += 1
-        self.common_step_counter += 1  # Track total steps for curriculum
-        self.last_action = (
-            self.current_action.copy() if self.current_action is not None else np.zeros_like(action)
-        )
-        self.current_action = action.copy()
+    def step(
+        self, action: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+        """Execute one step in the environment.
 
-        # Send control and get observation
-        self.luckyrobots.send_control(controls=action.tolist())
-        observation = self.luckyrobots.get_observation()
+        Args:
+            action: Action tensor.
+
+        Returns:
+            Tuple of (observation, reward, terminated, truncated, info).
+            All tensors have shape (num_envs,) or (num_envs, dim).
+        """
+        env_idx = 0  # Single-env for now
+
+        # Ensure action has batch dimension (num_envs, action_dim)
+        if action.dim() == 1:
+            action = action.unsqueeze(0)
+
+        self.step_count[env_idx] += 1
+        self.common_step_counter += 1  # Track total steps for curriculum
+
+        if self.current_action is not None:
+            self.last_action = self.current_action.clone()
+        else:
+            self.last_action = torch.zeros_like(action)
+        self.current_action = action.clone()
+
+        # Process action through actuator layer (raw [-1,1] → joint positions)
+        joint_positions = self.action_manager.process_action(action)
+
+        # Convert to list for gRPC (send first env's action for single-engine case)
+        joint_list = joint_positions[env_idx].detach().cpu().tolist()
+
+        # Synchronous RL step: send action, wait for physics, get observation in one RPC
+        observation = self.luckyrobots.step(actions=joint_list)
         self.latest_observation = observation
 
+        # Update entity data from observation (mjlab pattern: env.scene["robot"].data.*)
+        if observation.observation:
+            obs_tensor = torch.tensor(observation.observation, dtype=torch.float32, device=self._device)
+            self.scene["robot"].data.update_from_observation(obs_tensor, self._observation_names)
+
         # Update commands
-        self.command_manager.update(self.cfg.sim_dt)
+        self.command_manager.compute(self.cfg.sim_dt)
 
-        # Build context for reward/termination functions
-        context = self._build_mdp_context(observation)
+        # Compute reward using reward manager (accesses env.data directly)
+        cmd = self.command_manager.get_command("twist")
+        cmd_list = (
+            cmd[env_idx].tolist()
+            if cmd is not None and cmd.dim() == 2
+            else (cmd.tolist() if cmd is not None else [])
+        )
+        info: dict[str, Any] = {"command": cmd_list}
 
-        # Compute reward using reward manager
-        info: dict = {"command": self.command_manager.get_command("velocity").tolist()}
         if self.reward_manager is not None:
-            reward = self.reward_manager.compute(context)
+            reward = self.reward_manager.compute(dt=self.cfg.step_dt)
+            if reward.dim() == 0:
+                reward = reward.unsqueeze(0)  # Ensure (num_envs,) shape
             info["reward_details"] = {
-                name: value for name, [value] in self.reward_manager.get_active_iterable_terms()
+                name: value for name, [value] in self.reward_manager.get_active_iterable_terms(env_idx)
             }
         else:
-            reward = self._compute_reward(context, info)
+            reward = torch.zeros(self._num_envs, dtype=torch.float32, device=self._device)
 
-        # Compute termination using termination manager
+        # Compute termination using termination manager (accesses env.data directly)
         if self.termination_manager is not None:
-            self.termination_manager.compute(context)
-            terminated = self.termination_manager.terminated
-            info["termination_reasons"] = self.termination_manager.termination_reasons
+            self.termination_manager.compute()
+            terminated = self.termination_manager.terminated  # Shape: (num_envs,)
+            info["termination_reasons"] = self.termination_manager.termination_reasons(env_idx)
             info["termination_reason"] = (
-                self.termination_manager.termination_reasons[0]
-                if self.termination_manager.termination_reasons
-                else "none"
+                info["termination_reasons"][0] if info["termination_reasons"] else "none"
             )
             info["is_success"] = False
         else:
-            terminated = self._check_termination(context, info)
+            terminated = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
 
-        # Apply observation processing (noise, delay, history)
-        if observation.observation and self._obs_processor_initialized:
-            raw_obs = np.array(observation.observation, dtype=np.float32)
-            processed_obs = self.observation_processor.process(raw_obs)
-            info["raw_observation"] = raw_obs
-            info["processed_observation"] = processed_obs
-            obs = processed_obs
-        else:
-            obs = self._convert_observation(observation)
+        # Compute observation using observation manager
+        # Noise, delay, and history are applied automatically
+        obs = self.observation_manager.compute("policy")
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0)  # Ensure (num_envs, obs_dim) shape
 
-        # Check truncation (timeout)
+        # Check truncation (timeout) - shape: (num_envs,)
         truncated = self.step_count >= self.cfg.max_episode_length
 
-        # Update episode metrics
+        # Update episode metrics (using env_idx=0 for single env metrics tracking)
         self.episode_metrics.add_step()
-        self.episode_metrics.add_reward(reward)
-        if terminated:
+        reward_scalar = reward[env_idx].item() if isinstance(reward, torch.Tensor) else reward
+        self.episode_metrics.add_reward(reward_scalar)
+        term_val = terminated[env_idx].item() if isinstance(terminated, torch.Tensor) else terminated
+        trunc_val = truncated[env_idx].item() if isinstance(truncated, torch.Tensor) else truncated
+        if term_val:
             self.episode_metrics.set_terminated(info.get("termination_reason", ""))
-        if truncated:
+        if trunc_val:
             self.episode_metrics.set_truncated()
+
+        # Ensure all outputs are tensors with correct shapes
+        # obs: (num_envs, obs_dim), reward: (num_envs,), terminated: (num_envs,), truncated: (num_envs,)
+        if not isinstance(reward, torch.Tensor):
+            reward = torch.tensor([reward] * self._num_envs, dtype=torch.float32, device=self._device)
+        if not isinstance(terminated, torch.Tensor):
+            terminated = torch.tensor([terminated] * self._num_envs, dtype=torch.bool, device=self._device)
+        if not isinstance(truncated, torch.Tensor):
+            truncated = torch.tensor([truncated] * self._num_envs, dtype=torch.bool, device=self._device)
 
         return obs, reward, terminated, truncated, info
 
-    def _build_mdp_context(self, observation: ObservationResponse) -> dict:
-        """Build context dictionary for reward/termination functions.
-
-        This provides all the data that reward/termination functions might need.
-        """
-        context = {
-            "step_count": self.step_count,
-            "max_steps": self.cfg.max_episode_length,
-            "current_action": self.current_action,
-            "last_action": self.last_action,
-            "action_low": self.action_low,
-            "action_high": self.action_high,
-        }
-
-        if observation.observation:
-            obs_array = np.array(observation.observation, dtype=np.float32)
-            obs_parsed = self.obs_parser.parse(obs_array)
-
-            # Inject current command
-            current_command = self.command_manager.get_command("velocity")
-            obs_parsed["commands"] = current_command
-
-            context["obs_parsed"] = obs_parsed
-            context["obs_array"] = obs_array
-        else:
-            context["obs_parsed"] = None
-            context["obs_array"] = None
-
-        return context
-
-    def _compute_reward(self, context: dict, info: dict) -> float:
-        """Compute reward based on configuration.
-
-        Iterates through all reward terms defined in cfg.rewards,
-        calls each function directly, and computes weighted sum.
-        """
-        if context["obs_parsed"] is None:
-            return 0.0
-
-        total_reward = 0.0
-        reward_details = {}
-
-        for name, term in self.cfg.rewards.items():
-            func = term.func
-            kwargs = dict(term.params)
-
-            # Handle special cases for different function signatures
-            if func.__name__ == "action_rate_l2":
-                if context["current_action"] is None:
-                    continue
-                r = func(context["current_action"], context["last_action"], **kwargs)
-            elif func.__name__ == "joint_pos_limits":
-                kwargs.setdefault("action_low", context["action_low"])
-                kwargs.setdefault("action_high", context["action_high"])
-                r = func(context["obs_parsed"], **kwargs)
-            else:
-                r = func(context["obs_parsed"], **kwargs)
-
-            weighted_r = term.weight * r
-            total_reward += weighted_r
-            reward_details[name] = {"raw": r, "weighted": weighted_r}
-
-        info["reward_details"] = reward_details
-        return float(total_reward)
-
-    def _check_termination(self, context: dict, info: dict) -> bool:
-        """Check termination conditions based on configuration.
-
-        Iterates through all termination terms defined in cfg.terminations,
-        calls each function directly, and returns True if any condition is met.
-        """
-        info["is_success"] = False
-        info["termination_reasons"] = []
-
-        if context["obs_parsed"] is None:
-            return False
-
-        for name, term in self.cfg.terminations.items():
-            func = term.func
-            kwargs = dict(term.params)
-
-            # Handle special cases for different function signatures
-            if func.__name__ in ("time_out", "max_steps_termination"):
-                result = func(context["step_count"], context["max_steps"], **kwargs)
-            elif func.__name__ == "nan_detection":
-                result = func(context["obs_parsed"])
-            else:
-                result = func(context["obs_parsed"], **kwargs)
-
-            if result:
-                info["termination_reasons"].append(name)
-
-        terminated = len(info["termination_reasons"]) > 0
-        info["termination_reason"] = info["termination_reasons"][0] if terminated else "none"
-
-        return terminated
-
-    def render(self) -> np.ndarray | None:
+    def render(self) -> torch.Tensor | None:
         """Render the environment."""
         if self.render_mode == "rgb_array":
-            return np.zeros((480, 640, 3), dtype=np.uint8)
+            return torch.zeros((480, 640, 3), dtype=torch.uint8, device=self._device)
         return None
 
     def close(self) -> None:
@@ -511,74 +624,30 @@ class ManagerBasedRlEnv(gym.Env):
         logger.info("Environment closed")
 
     def get_episode_log(self) -> dict:
-        """Get the current episode's log data.
-
-        Returns a dictionary of metrics collected during the last completed
-        episode. This follows the mjlab pattern where extras["log"] contains
-        aggregated metrics from all managers.
-
-        Returns:
-            Dictionary with keys like:
-            - Episode_Reward/<term_name>: Cumulative reward for each term
-            - Episode_Termination/<term_name>: Whether each termination triggered
-            - Episode/total_reward: Total episode reward
-            - Episode/length: Episode length in steps
-            - Episode/terminated: Whether episode was terminated (failure)
-            - Episode/truncated: Whether episode was truncated (timeout)
-            - Episode/survived: Whether robot survived (truncated but not terminated)
-        """
+        """Get the current episode's log data."""
         return self.extras.get("log", {})
 
     def get_training_metrics(self) -> dict:
-        """Get current training metrics for logging.
-
-        Returns metrics useful for monitoring training progress, including
-        cumulative statistics and current state. Uses task name as prefix.
-
-        Returns:
-            Dictionary with training metrics prefixed by task name.
-        """
+        """Get current training metrics for logging."""
         prefix = self.task_name
         metrics = {
             f"{prefix}/total_steps": float(self.common_step_counter),
             f"{prefix}/total_episodes": float(self.episode_count),
-            f"{prefix}/current_episode_length": float(self.step_count),
+            f"{prefix}/current_episode_length": float(self.step_count[0].item()),
         }
 
-        # Add current reward breakdown if available
         if self.reward_manager is not None:
-            for name, value in self.reward_manager.episode_sums.items():
+            for name, value in self.reward_manager.episode_sums(0).items():
                 metrics[f"{prefix}_Reward/{name}"] = value
 
         return metrics
 
     def log_metric(self, name: str, value: float) -> None:
-        """Add a custom metric to the current episode's log.
-
-        The metric will be prefixed with the task name automatically.
-
-        Args:
-            name: Metric name (will be prefixed with task name).
-            value: Metric value.
-
-        Example:
-            >>> env.log_metric("command_tracking_error", 0.05)
-            # Results in: "Locomotion/command_tracking_error": 0.05
-        """
+        """Add a custom metric to the current episode's log."""
         key = f"{self.task_name}/{name}"
         self.extras["log"][key] = value
 
     def log_metrics(self, metrics: dict[str, float]) -> None:
-        """Add multiple custom metrics to the current episode's log.
-
-        All metrics will be prefixed with the task name automatically.
-
-        Args:
-            metrics: Dictionary of metric names to values.
-
-        Example:
-            >>> env.log_metrics({"vel_error": 0.1, "heading_error": 0.05})
-            # Results in: "Locomotion/vel_error": 0.1, "Locomotion/heading_error": 0.05
-        """
+        """Add multiple custom metrics to the current episode's log."""
         for name, value in metrics.items():
             self.log_metric(name, value)

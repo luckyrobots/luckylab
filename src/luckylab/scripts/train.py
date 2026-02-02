@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-Train a policy using skrl.
+Train a policy using skrl with PyTorch.
 
 Usage:
-    # PPO training (default, PyTorch backend)
+    # PPO training (default)
     python -m luckylab.scripts.train --task go1_velocity_flat
 
     # SAC training
     python -m luckylab.scripts.train --task go1_velocity_flat --algorithm sac
-
-    # JAX backend
-    python -m luckylab.scripts.train --task go1_velocity_flat --backend jax
 
     # With GPU
     python -m luckylab.scripts.train --task go1_velocity_flat --device cuda
@@ -25,11 +22,8 @@ Usage:
     python -m luckylab.scripts.train --task go1_velocity_flat --host localhost --port 50051
 
 Examples:
-    # Basic PPO training (PyTorch)
+    # Basic PPO training
     python -m luckylab.scripts.train --task go1_velocity_flat
-
-    # PPO with JAX backend
-    python -m luckylab.scripts.train --task go1_velocity_flat --backend jax --device cuda:0
 
     # SAC training on GPU with W&B
     python -m luckylab.scripts.train --task go1_velocity_flat --algorithm sac --device cuda --logger wandb
@@ -70,13 +64,6 @@ def main() -> int:
         default=None,
         choices=["ppo", "sac", "td3", "ddpg"],
         help="RL algorithm (default: from task config)",
-    )
-    parser.add_argument(
-        "--backend",
-        type=str,
-        default=None,
-        choices=["torch", "jax"],
-        help="Deep learning backend (default: torch)",
     )
     parser.add_argument(
         "--device",
@@ -126,8 +113,8 @@ def main() -> int:
         "--logger",
         type=str,
         default=None,
-        choices=["tensorboard", "wandb"],
-        help="Logger backend (default: tensorboard)",
+        choices=["wandb"],
+        help="Logger backend (default: wandb)",
     )
     parser.add_argument(
         "--wandb-project",
@@ -158,16 +145,46 @@ def main() -> int:
         logger.error(str(e))
         return 1
 
-    rl_cfg = load_rl_cfg(args.task)
-    if rl_cfg is None:
-        # Use default config
-        from luckylab.rl import SkrlCfg
+    # Load algorithm-specific config if algorithm is specified
+    if args.algorithm is not None:
+        # Try to load algorithm-specific config (e.g., GO1_SAC_CFG for sac)
+        try:
+            from luckylab.tasks.velocity.config.go1.rl_cfg import GO1_PPO_CFG, GO1_SAC_CFG
 
-        rl_cfg = SkrlCfg()
-        logger.info("Using default RL configuration")
+            algo_configs = {
+                "ppo": GO1_PPO_CFG,
+                "sac": GO1_SAC_CFG,
+            }
+            if args.algorithm in algo_configs:
+                rl_cfg = copy.deepcopy(algo_configs[args.algorithm])
+                logger.info(f"Loaded {args.algorithm.upper()} config for task")
+            else:
+                rl_cfg = load_rl_cfg(args.task)
+                if rl_cfg is not None:
+                    rl_cfg = copy.deepcopy(rl_cfg)
+                    rl_cfg.algorithm = args.algorithm
+                else:
+                    from luckylab.rl import SkrlCfg
+
+                    rl_cfg = SkrlCfg(algorithm=args.algorithm)
+        except ImportError:
+            rl_cfg = load_rl_cfg(args.task)
+            if rl_cfg is not None:
+                rl_cfg = copy.deepcopy(rl_cfg)
+                rl_cfg.algorithm = args.algorithm
+            else:
+                from luckylab.rl import SkrlCfg
+
+                rl_cfg = SkrlCfg(algorithm=args.algorithm)
     else:
-        # Make a copy to avoid modifying the original
-        rl_cfg = copy.deepcopy(rl_cfg)
+        rl_cfg = load_rl_cfg(args.task)
+        if rl_cfg is None:
+            from luckylab.rl import SkrlCfg
+
+            rl_cfg = SkrlCfg()
+            logger.info("Using default RL configuration")
+        else:
+            rl_cfg = copy.deepcopy(rl_cfg)
 
     # Apply env_cfg overrides (LuckyEngine connection)
     if args.host is not None:
@@ -178,18 +195,9 @@ def main() -> int:
         env_cfg.port = args.port
         logger.info(f"Using port: {args.port}")
 
-    # Apply CLI overrides
-    if args.backend is not None:
-        rl_cfg.backend = args.backend
-        logger.info(f"Using backend: {args.backend}")
-
-    if args.algorithm is not None:
-        rl_cfg.algorithm = args.algorithm
-        logger.info(f"Using algorithm: {args.algorithm}")
-
     if args.timesteps is not None:
         rl_cfg.timesteps = args.timesteps
-        logger.info(f"Overriding timesteps: {args.timesteps}")
+        logger.info(f"Overriding timesteps: {args.timesteps:,}")
 
     if args.seed is not None:
         rl_cfg.seed = args.seed
@@ -215,7 +223,6 @@ def main() -> int:
     logger.info("=" * 60)
     logger.info(f"  Task: {args.task}")
     logger.info(f"  Algorithm: {rl_cfg.algorithm.upper()}")
-    logger.info(f"  Backend: {rl_cfg.backend}")
     logger.info(f"  Device: {args.device}")
     logger.info(f"  LuckyEngine: {env_cfg.host}:{env_cfg.port}")
     logger.info(f"  Timesteps: {rl_cfg.timesteps:,}")
