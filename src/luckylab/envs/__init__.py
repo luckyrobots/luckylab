@@ -1,5 +1,3 @@
-"""LuckyLab environments."""
-
 from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv as ManagerBasedRlEnv
 from luckylab.envs.manager_based_rl_env import (
     ManagerBasedRlEnvCfg as ManagerBasedRlEnvCfg,

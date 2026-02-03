@@ -1,163 +1,129 @@
-"""Curriculum manager for progressive training difficulty.
-
-Follows the mjlab ManagerBase pattern with term-based configuration.
-"""
+"""Curriculum manager for updating environment quantities subject to a training curriculum."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 import torch
+from prettytable import PrettyTable
 
-from .manager_base import ManagerBase
+from luckylab.managers.manager_base import ManagerBase
+from luckylab.managers.manager_term_config import CurriculumTermCfg
 
 if TYPE_CHECKING:
-    from ..envs.manager_based_rl_env import ManagerBasedRlEnv
-    from .manager_term_config import CurriculumTermCfg
-
-
-@dataclass
-class EpisodeMetrics:
-    """Metrics accumulated during a single episode."""
-
-    steps: int = 0
-    total_reward: float = 0.0
-    terminated: bool = False
-    truncated: bool = False
-    termination_reason: str = ""
-
-    def add_step(self) -> None:
-        self.steps += 1
-
-    def add_reward(self, reward: float) -> None:
-        self.total_reward += reward
-
-    def set_terminated(self, reason: str = "") -> None:
-        self.terminated = True
-        self.termination_reason = reason
-
-    def set_truncated(self) -> None:
-        self.truncated = True
-
-    def finalize(self) -> dict:
-        """Convert to dictionary for curriculum manager."""
-        return {
-            "episode_length": self.steps,
-            "total_reward": self.total_reward,
-            "terminated": self.terminated,
-            "truncated": self.truncated,
-            "termination_reason": self.termination_reason,
-            "survived": self.truncated and not self.terminated,  # Made it to timeout
-        }
-
-    def reset(self) -> None:
-        """Reset metrics for a new episode."""
-        self.steps = 0
-        self.total_reward = 0.0
-        self.terminated = False
-        self.truncated = False
-        self.termination_reason = ""
+    from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 class CurriculumManager(ManagerBase):
-    """Manages curriculum terms using the ManagerBase pattern.
-
-    This follows the mjlab pattern where curriculum is a dict of term configs,
-    matching how rewards and terminations are configured.
-
-    Each curriculum term is a function that receives the environment and can
-    modify its state based on training progress (step count, episode count, etc.).
-    """
-
     _env: ManagerBasedRlEnv
 
-    def __init__(self, cfg: dict[str, CurriculumTermCfg], env: ManagerBasedRlEnv) -> None:
-        """Initialize the curriculum manager.
-
-        Args:
-            cfg: Dict mapping term names to CurriculumTermCfg instances.
-            env: The environment instance.
-        """
+    def __init__(self, cfg: dict[str, CurriculumTermCfg], env: ManagerBasedRlEnv):
         self._term_names: list[str] = []
         self._term_cfgs: list[CurriculumTermCfg] = []
+        self._class_term_cfgs: list[CurriculumTermCfg] = list()
+
         self.cfg = cfg
         super().__init__(env=env)
 
+        self._curriculum_state = dict()
+        for term_name in self._term_names:
+            self._curriculum_state[term_name] = None
+
     def __str__(self) -> str:
-        """Get string representation of the manager."""
-        lines = [f"<CurriculumManager> contains {len(self._term_names)} active terms."]
-        if self._term_names:
-            lines.append("Active Curriculum Terms:")
-            lines.append(f"{'Index':<8} {'Name':<30}")
-            lines.append("-" * 40)
-            for idx, name in enumerate(self._term_names):
-                lines.append(f"{idx:<8} {name:<30}")
-        return "\n".join(lines)
+        msg = f"<CurriculumManager> contains {len(self._term_names)} active terms.\n"
+        table = PrettyTable()
+        table.title = "Active Curriculum Terms"
+        table.field_names = ["Index", "Name"]
+        table.align["Name"] = "l"
+        for index, name in enumerate(self._term_names):
+            table.add_row([index, name])
+        msg += table.get_string()
+        msg += "\n"
+        return msg
+    
+    # Properties.
 
     @property
     def active_terms(self) -> list[str]:
-        """Get list of active term names."""
         return self._term_names
+    
+    def get_active_iterable_terms(
+        self, env_idx: int
+    ) -> Sequence[tuple[str, Sequence[float]]]:
+        terms = []
+        for term_name, term_state in self._curriculum_state.items():
+            if term_state is not None:
+                data = []
+                if isinstance(term_state, dict):
+                    for _key, value in term_state.items():
+                        if isinstance(value, torch.Tensor):
+                            value = value.item()
+                        terms[term_name].append(value)
+                else:
+                    if isinstance(term_state, torch.Tensor):
+                        term_state = term_state.item()
+                    data.append(term_state)
+                terms.append((term_name, data))
+        return terms
 
-    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, Any]:
-        """Reset the manager state for specified environments.
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> dict[str, float]:
+        extras = {}
+        for term_name, term_state in self._curriculum_state.items():
+            if term_state is not None:
+                if isinstance(term_state, dict):
+                    for key, value in term_state.items():
+                        if isinstance(value, torch.Tensor):
+                            value = value.item()
+                        extras[f"Curriculum/{term_name}/{key}"] = value
+                else:
+                    if isinstance(term_state, torch.Tensor):
+                        term_state = term_state.item()
+                    extras[f"Curriculum/{term_name}"] = term_state
+        for term_cfg in self._class_term_cfgs:
+            term_cfg.func.reset(env_ids=env_ids)
+        return extras
 
-        Args:
-            env_ids: Tensor of environment indices to reset. None = all envs.
+    def compute(self, env_ids: torch.Tensor | slice | None = None):
+        if env_ids is None:
+            env_ids = slice(None)
+        for name, term_cfg in zip(self._term_names, self._term_cfgs, strict=False):
+            state = term_cfg.func(self._env, env_ids, **term_cfg.params)
+            self._curriculum_state[name] = state
 
-        Returns:
-            Empty dictionary (curriculum doesn't produce reset stats).
-        """
-        # Curriculum doesn't need per-env reset tracking
-        return {}
-
-    def compute(self, env_ids: torch.Tensor | None = None) -> None:
-        """Execute all curriculum terms.
-
-        This is typically called at the start of each episode (during reset).
-        Terms can modify environment parameters based on training progress.
-
-        Args:
-            env_ids: Tensor of environment indices. None = all envs.
-        """
-        for term_cfg in self._term_cfgs:
-            term_cfg.func(self._env, env_ids, **term_cfg.params)
-
-    def get_active_iterable_terms(self, env_idx: int = 0) -> list[tuple[str, list[float]]]:
-        """Get term values for iteration/logging.
-
-        Returns:
-            List of (term_name, [0.0]) tuples (curriculum terms don't have values).
-        """
-        return [(name, [0.0]) for name in self._term_names]
-
-    def _prepare_terms(self) -> None:
-        """Parse configuration and prepare terms."""
+    def _prepare_terms(self):
         for term_name, term_cfg in self.cfg.items():
+            term_cfg: CurriculumTermCfg | None
             if term_cfg is None:
+                print(f"term: {term_name} set to None, skipping...")
                 continue
-
             self._resolve_common_term_cfg(term_name, term_cfg)
             self._term_names.append(term_name)
             self._term_cfgs.append(term_cfg)
+            if hasattr(term_cfg.func, "reset") and callable(term_cfg.func.reset):
+                self._class_term_cfgs.append(term_cfg)
 
 
 class NullCurriculumManager:
-    """Null curriculum manager that does nothing.
+    """Placeholder for absent curriculum manager that safely no-ops all operations."""
 
-    Used when no curriculum is configured, following the mjlab pattern.
-    """
+    def __init__(self):
+        self.active_terms: list[str] = []
+        self._curriculum_state: dict[str, Any] = {}
+        self.cfg = None
+    
+    def __str__(self) -> str:
+        return "<NullCurriculumManager> (inactive)"
 
-    @property
-    def active_terms(self) -> list[str]:
-        """Get list of active term names (empty)."""
+    def __repr__(self) -> str:
+        return "NullCurriculumManager()"
+    
+    def get_active_iterable_terms(
+        self, env_idx: int
+    ) -> Sequence[tuple[str, Sequence[float]]]:
         return []
 
-    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, Any]:
-        """No-op reset."""
+    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, float]:
         return {}
 
     def compute(self, env_ids: torch.Tensor | None = None) -> None:
-        """No-op compute."""
         pass

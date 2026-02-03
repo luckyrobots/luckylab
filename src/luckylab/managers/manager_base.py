@@ -1,32 +1,24 @@
-"""Base class for all managers.
-
-This module provides the abstract base class for managers following the mjlab pattern,
-with multi-environment support using torch tensors.
-"""
-
 from __future__ import annotations
 
 import abc
+import inspect
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import torch
 
+from luckylab.managers.scene_entity_config import SceneEntityCfg
+
 if TYPE_CHECKING:
-    from ..envs.manager_based_rl_env import ManagerBasedRlEnv
-    from .manager_term_config import ManagerTermBaseCfg
+    from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
+    from luckylab.managers.manager_term_config import ManagerTermBaseCfg
 
 
 class ManagerTermBase:
-    """Base class for class-based manager terms.
-
-    Unlike function-based terms, class-based terms can maintain state
-    across calls and implement reset logic.
-    """
-
-    def __init__(self, cfg: Any, env: ManagerBasedRlEnv) -> None:
-        self.cfg = cfg
+    def __init__(self, env: ManagerBasedRlEnv) -> None:
         self._env = env
+
+    # Properties.
 
     @property
     def num_envs(self) -> int:
@@ -39,25 +31,27 @@ class ManagerTermBase:
     @property
     def name(self) -> str:
         return self.__class__.__name__
+    
+    # Methods.
 
-    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, float]:
-        """Reset the term state for specified environments."""
-        return {}
+    def reset(self, env_ids: torch.Tensor | slice | None) -> Any:
+        """Resets the manager term."""
+        del env_ids  # Unused.
+        pass
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
 
 class ManagerBase(abc.ABC):
-    """Abstract base class for all managers.
-
-    Managers aggregate multiple terms (rewards, terminations, etc.) and provide
-    a unified interface for computing their values and resetting state.
-    """
+    """Base class for all managers."""
 
     def __init__(self, env: ManagerBasedRlEnv) -> None:
         self._env = env
+
         self._prepare_terms()
+
+    # Properties.
 
     @property
     def num_envs(self) -> int:
@@ -72,12 +66,14 @@ class ManagerBase(abc.ABC):
     def active_terms(self) -> list[str]:
         raise NotImplementedError
 
-    def reset(self, env_ids: torch.Tensor | None = None) -> dict[str, Any]:
-        """Reset the manager state for specified environments."""
+    def reset(self, env_ids: torch.Tensor) -> dict[str, Any]:
+        """Resets the manager and returns logging info for the current step."""
+        del env_ids  # Unused.
         return {}
-
-    def get_active_iterable_terms(self, env_idx: int = 0) -> Sequence[tuple[str, Sequence[float]]]:
-        """Get term values for iteration/logging."""
+    
+    def get_active_iterable_terms(
+        self, env_idx: int
+    ) -> Sequence[tuple[str, Sequence[float]]]:
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -85,10 +81,11 @@ class ManagerBase(abc.ABC):
         """Parse configuration and prepare terms."""
         raise NotImplementedError
 
-    def _resolve_common_term_cfg(self, term_name: str, term_cfg: ManagerTermBaseCfg) -> None:
-        """Resolve common term configuration."""
-        import inspect
-
-        del term_name
+    def _resolve_common_term_cfg(self, term_name: str, term_cfg: ManagerTermBaseCfg):
+        del term_name  # Unused.
+        for key, value in term_cfg.params.items():
+            if isinstance(value, SceneEntityCfg):
+                value.resolve(self._env.scene)
+                term_cfg.params[key] = value
         if inspect.isclass(term_cfg.func):
             term_cfg.func = term_cfg.func(cfg=term_cfg, env=self._env)

@@ -1,145 +1,148 @@
-"""Manager term configurations for rewards, terminations, etc.
-
-This module defines configuration dataclasses for all MDP components,
-following the mjlab pattern where each manager uses a dict of term configs.
-"""
-
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable, ParamSpec, TypeVar
 
-if TYPE_CHECKING:
-    from .command_manager import CommandTerm
+import torch
+
+from luckylab.managers.action_manager import ActionTerm
+from luckylab.managers.command_manager import CommandTerm
+from luckylab.utils.noise.noise_cfg import NoiseCfg, NoiseModelCfg
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def term(term_cls: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    return field(default_factory=lambda: term_cls(*args, **kwargs))
 
 
 @dataclass
 class ManagerTermBaseCfg:
-    """Base configuration for a manager term."""
+    func: Any
+    params: dict[str, Any] = field(default_factory=lambda: {})
 
-    func: Callable
-    """Function to call for this term."""
-    params: dict[str, Any] = field(default_factory=dict)
-    """Parameters to pass to the function."""
+
+##
+# Action manager.
+##
+
+
+@dataclass(kw_only=True)
+class ActionTermCfg:
+    """Configuration for an action term."""
+
+    class_type: type[ActionTerm]
+    asset_name: str
+    clip: dict[str, tuple] | None = None
+
+
+##
+# Command manager.
+##
+
+
+@dataclass(kw_only=True)
+class CommandTermCfg:
+    """Configuration for a command generator term."""
+
+    class_type: type[CommandTerm]
+    resampling_time_range: tuple[float, float] = (5.0, 10.0)
+    debug_vis: bool = False
+
+
+## 
+# Curriculum manager.
+##
+
+
+@dataclass(kw_only=True)
+class CurriculumTermCfg(ManagerTermBaseCfg):
+    pass
+
+
+##
+# Observation manager.
+##
+
+
+@dataclass
+class ObservationTermCfg(ManagerTermBaseCfg):
+    """Configuration for an observation term.
+
+    Processing pipeline: compute → noise → clip → scale → delay → history.
+    Delay models sensor latency. History provides temporal context. Both are optional
+    and can be combined.
+    """
+
+    noise: NoiseCfg | NoiseModelCfg | None = None
+    """Noise model to apply to the observation."""
+    clip: tuple[float, float] | None = None
+    """Range (min, max) to clip the observation values."""
+    scale: tuple[float, ...] | float | torch.Tensor | None = None
+    """Scaling factor(s) to multiply the observation by."""
+    delay_min_lag: int = 0
+    """Minimum lag (in steps) for delayed observations. Lag sampled uniformly from
+    [min_lag, max_lag]. Convert to ms: lag * (1000 / control_hz)."""
+    delay_max_lag: int = 0
+    """Maximum lag (in steps) for delayed observations. Use min=max for constant delay."""
+    delay_per_env: bool = True
+    """If True, each environment samples its own lag. If False, all environments share
+    the same lag at each step."""
+    delay_hold_prob: float = 0.0
+    """Probability of reusing the previous lag instead of resampling. Useful for
+    temporally correlated latency patterns."""
+    delay_update_period: int = 0
+    """Resample lag every N steps (models multi-rate sensors). If 0, update every step."""
+    delay_per_env_phase: bool = True
+    """If True and update_period > 0, stagger update timing across envs to avoid
+    synchronized resampling."""
+    history_length: int = 0
+    """Number of past observations to keep in history. 0 = no history."""
+    flatten_history_dim: bool = True
+    """Whether to flatten the history dimension into observation.
+
+    When True and concatenate_terms=True, uses term-major ordering:
+    [A_t0, A_t1, ..., A_tH-1, B_t0, B_t1, ..., B_tH-1, ...]
+    See docs/api/observation_history_delay.md for details on ordering."""
+
+
+@dataclass
+class ObservationGroupCfg:
+    """Configuration for an observation group.
+
+    The `terms` field contains a dictionary mapping term names to their configurations.
+    """
+
+    terms: dict[str, ObservationTermCfg]
+    concatenate_terms: bool = True
+    concatenate_dim: int = -1
+    enable_corruption: bool = True
+    history_length: int = 1
+    flatten_history: bool = True
+
+
+##
+# Reward manager.
+##
 
 
 @dataclass(kw_only=True)
 class RewardTermCfg(ManagerTermBaseCfg):
     """Configuration for a reward term."""
 
-    func: Callable[..., float]
-    """Reward function to call."""
+    func: Any
     weight: float
-    """Weight to apply to this reward term."""
+
+
+## 
+# Termination manager.
+##
 
 
 @dataclass
 class TerminationTermCfg(ManagerTermBaseCfg):
     """Configuration for a termination term."""
 
-    func: Callable[..., bool]
-    """Termination function to call."""
     time_out: bool = False
     """Whether the term contributes towards episodic timeouts."""
-
-
-@dataclass
-class CurriculumTermCfg(ManagerTermBaseCfg):
-    """Configuration for a curriculum term."""
-
-    func: Callable[..., None]
-    """Curriculum function to call."""
-
-
-@dataclass(kw_only=True)
-class CommandTermCfg:
-    """Configuration for a command generator term.
-
-    Uses class_type pattern like mjlab - you specify a CommandTerm subclass
-    that will be instantiated by the manager.
-    """
-
-    class_type: type[CommandTerm]
-    """CommandTerm subclass to instantiate."""
-    resampling_time_range: tuple[float, float] = (5.0, 10.0)
-    """Time range for resampling commands (min, max) in seconds."""
-    debug_vis: bool = False
-    """Whether to enable debug visualization for this command."""
-    params: dict[str, Any] = field(default_factory=dict)
-    """Additional parameters passed to the command term."""
-
-
-@dataclass(kw_only=True)
-class ActionTermCfg:
-    """Configuration for an action term.
-
-    Uses class_type pattern like mjlab - you specify an ActionTerm subclass
-    that will be instantiated by the manager.
-    """
-
-    class_type: type
-    """ActionTerm subclass to instantiate."""
-    asset_name: str = "robot"
-    """Name of the asset this action applies to."""
-    params: dict[str, Any] = field(default_factory=dict)
-    """Additional parameters passed to the action term."""
-
-
-@dataclass
-class ObservationTermCfg(ManagerTermBaseCfg):
-    """Configuration for an observation term (matches mjlab).
-
-    Defines how to compute an observation and what noise to apply.
-    """
-
-    func: Callable[..., Any]
-    """Observation computation function to call."""
-    noise: Any | None = None
-    """Noise configuration to apply to the observation (e.g., UniformNoiseCfg)."""
-    clip: tuple[float, float] | None = None
-    """Clipping range (min, max) for the observation."""
-    scale: float = 1.0
-    """Scale factor for the observation."""
-
-
-@dataclass
-class ObservationGroupCfg:
-    """Configuration for a group of observation terms (matches mjlab).
-
-    Groups observations into policy/critic sets with optional noise corruption,
-    delay simulation, and history stacking.
-    """
-
-    terms: dict[str, ObservationTermCfg] = field(default_factory=dict)
-    """Observation terms in this group."""
-    concatenate_terms: bool = True
-    """Whether to concatenate all terms into a single tensor."""
-    enable_corruption: bool = True
-    """Whether to apply noise corruption to observations."""
-    delay_range: tuple[int, int] = (0, 0)
-    """Delay range in steps (min, max). 0 = no delay. Simulates sensor latency."""
-    history_length: int = 1
-    """Number of observations to stack. 1 = no history (current only)."""
-    flatten_history: bool = True
-    """Whether to flatten history [T, obs_dim] to [T * obs_dim]."""
-
-
-@dataclass
-class JointActuatorCfg:
-    """Configuration for a single joint actuator.
-
-    Defines how raw actions [-1, 1] are converted to joint positions:
-        joint_position = raw_action * action_scale + default_pos
-    """
-
-    name: str
-    """Name of the joint (e.g., 'FR_hip')."""
-    default_pos: float
-    """Default joint position (standing pose)."""
-    action_scale: float
-    """Scale factor for action to joint position conversion."""
-    pos_limit_lower: float | None = None
-    """Lower position limit for safety clipping (optional)."""
-    pos_limit_upper: float | None = None
-    """Upper position limit for safety clipping (optional)."""
