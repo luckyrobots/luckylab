@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 
-from .config import ActorCriticCfg, SkrlCfg
+from .config import ActorCriticCfg, RlRunnerCfg
 
 if TYPE_CHECKING:
     from ..envs import ManagerBasedRlEnvCfg
@@ -42,11 +42,23 @@ class GaussianPolicy(GaussianMixin, Model):
         Model.__init__(self, obs_space, act_space, device)
         GaussianMixin.__init__(self, clip_actions=False, clip_log_std=True, min_log_std=-20, max_log_std=2)
         self.net = _build_mlp(obs_space.shape[0], act_space.shape[0], cfg.actor_hidden_dims, cfg.activation)
-        self.log_std = nn.Parameter(torch.full((act_space.shape[0],), cfg.init_noise_std).log())
+
+        self._noise_std_type = cfg.noise_std_type
+        if cfg.noise_std_type == "log":
+            # Store log(std) directly - more numerically stable
+            self.log_std = nn.Parameter(torch.full((act_space.shape[0],), cfg.init_noise_std).log())
+        else:
+            # Store std directly (scalar mode, matches rsl-rl behavior)
+            self.std = nn.Parameter(torch.full((act_space.shape[0],), cfg.init_noise_std))
 
     def compute(self, inputs, role=""):
         out = self.net(inputs["states"])
-        return out, self.log_std.expand_as(out), {}
+        if self._noise_std_type == "log":
+            log_std = self.log_std.expand_as(out)
+        else:
+            # Convert scalar std to log_std for skrl's GaussianMixin
+            log_std = self.std.clamp(min=1e-6).log().expand_as(out)
+        return out, log_std, {}
 
 
 class DeterministicPolicy(DeterministicMixin, Model):
@@ -92,7 +104,7 @@ class QNetwork(DeterministicMixin, Model):
 # =============================================================================
 
 
-def _build_agent(env, cfg: SkrlCfg, device: str, total_timesteps: int):
+def _build_agent(env, cfg: RlRunnerCfg, device: str):
     """Build skrl agent based on algorithm."""
     from skrl.memories.torch import RandomMemory
     from skrl.resources.preprocessors.torch import RunningStandardScaler
@@ -106,12 +118,12 @@ def _build_agent(env, cfg: SkrlCfg, device: str, total_timesteps: int):
     value_preprocessor = None
     value_preprocessor_kwargs = {}
 
-    if policy_cfg.normalize_actor_obs:
+    if policy_cfg.actor_obs_normalization:
         state_preprocessor = RunningStandardScaler
         state_preprocessor_kwargs = {"size": obs_space.shape[0], "device": device}
         logger.info("Enabled actor observation normalization (RunningStandardScaler)")
 
-    if policy_cfg.normalize_critic_obs:
+    if policy_cfg.critic_obs_normalization:
         value_preprocessor = RunningStandardScaler
         value_preprocessor_kwargs = {"size": obs_space.shape[0], "device": device}
         logger.info("Enabled critic observation normalization (RunningStandardScaler)")
@@ -124,21 +136,23 @@ def _build_agent(env, cfg: SkrlCfg, device: str, total_timesteps: int):
             "policy": GaussianPolicy(obs_space, act_space, device, policy_cfg),
             "value": ValueNetwork(obs_space, act_space, device, policy_cfg),
         }
-        memory = RandomMemory(memory_size=cfg.ppo.rollouts, num_envs=env.num_envs, device=device)
+        memory = RandomMemory(memory_size=cfg.ppo.num_steps_per_env, num_envs=env.num_envs, device=device)
         agent_cfg = PPO_DEFAULT_CONFIG.copy()
         agent_cfg.update(
             {
-                "rollouts": cfg.ppo.rollouts,
-                "learning_epochs": cfg.ppo.learning_epochs,
-                "mini_batches": cfg.ppo.mini_batches,
-                "discount_factor": cfg.ppo.discount_factor,
-                "lambda": cfg.ppo.lambda_gae,
+                "rollouts": cfg.ppo.num_steps_per_env,
+                "learning_epochs": cfg.ppo.num_learning_epochs,
+                "mini_batches": cfg.ppo.num_mini_batches,
+                "discount_factor": cfg.ppo.gamma,
+                "lambda": cfg.ppo.lam,
                 "learning_rate": cfg.ppo.learning_rate,
-                "ratio_clip": cfg.ppo.ratio_clip,
-                "value_loss_scale": cfg.ppo.value_loss_scale,
-                "entropy_loss_scale": cfg.ppo.entropy_loss_scale,
-                "grad_norm_clip": cfg.ppo.grad_norm_clip,
-                "kl_threshold": cfg.ppo.kl_threshold,
+                "ratio_clip": cfg.ppo.clip_param,
+                "value_clip": cfg.ppo.clip_param,  # Use same clip param for value
+                "clip_predicted_values": cfg.ppo.use_clipped_value_loss,
+                "value_loss_scale": cfg.ppo.value_loss_coef,
+                "entropy_loss_scale": cfg.ppo.entropy_coef,
+                "grad_norm_clip": cfg.ppo.max_grad_norm,
+                "kl_threshold": cfg.ppo.desired_kl,
                 # Observation normalization
                 "state_preprocessor": state_preprocessor,
                 "state_preprocessor_kwargs": state_preprocessor_kwargs,
@@ -148,28 +162,15 @@ def _build_agent(env, cfg: SkrlCfg, device: str, total_timesteps: int):
         )
 
         # Learning rate scheduling
-        if cfg.ppo.lr_schedule == "linear":
-            import torch.optim.lr_scheduler as lr_scheduler
-            # Linear decay from learning_rate to 0 (or end_factor * learning_rate)
-            end_factor = cfg.ppo.lr_schedule_kwargs.get("end_factor", 0.0)
-            agent_cfg["learning_rate_scheduler"] = lr_scheduler.LinearLR
-            agent_cfg["learning_rate_scheduler_kwargs"] = {
-                "start_factor": 1.0,
-                "end_factor": end_factor,
-                "total_iters": total_timesteps // cfg.ppo.rollouts,
-            }
-            logger.info(f"Enabled linear LR schedule (end_factor={end_factor})")
-        elif cfg.ppo.lr_schedule == "adaptive":
+        if cfg.ppo.schedule == "adaptive":
             # Use skrl's KLAdaptiveLR scheduler
             # Adjusts LR based on KL divergence: decrease if KL too high, increase if too low
             from skrl.resources.schedulers.torch import KLAdaptiveLR
             agent_cfg["learning_rate_scheduler"] = KLAdaptiveLR
             agent_cfg["learning_rate_scheduler_kwargs"] = {
-                "kl_threshold": cfg.ppo.kl_threshold,
-                "min_lr": cfg.ppo.lr_schedule_kwargs.get("min_lr", 1e-6),
-                "max_lr": cfg.ppo.lr_schedule_kwargs.get("max_lr", 1e-2),
+                "kl_threshold": cfg.ppo.desired_kl,
             }
-            logger.info(f"Enabled adaptive LR schedule (kl_threshold={cfg.ppo.kl_threshold})")
+            logger.info(f"Enabled adaptive LR schedule (desired_kl={cfg.ppo.desired_kl})")
         # else: fixed schedule (no scheduler)
 
         Agent = PPO
@@ -294,7 +295,7 @@ def _cfg_to_dict(cfg) -> dict:
     return dict(cfg) if hasattr(cfg, "__iter__") else {}
 
 
-def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu") -> None:
+def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu") -> None:
     """Train using skrl with iteration logging."""
     from ..envs import ManagerBasedRlEnv
     from ..utils.iteration_logger import IterationLogger, IterationLoggerCfg
@@ -304,19 +305,16 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu") -
     if "cuda" in device:
         torch.cuda.manual_seed(rl_cfg.seed)
 
-    logger.info(f"Training with {rl_cfg.algorithm.upper()} for {rl_cfg.timesteps:,} timesteps")
+    # Get num_steps_per_env from PPO config (for PPO) or use default
+    num_steps_per_env = rl_cfg.ppo.num_steps_per_env if rl_cfg.algorithm == "ppo" else 24
+    total_timesteps = rl_cfg.max_iterations * num_steps_per_env
+
+    logger.info(f"Training with {rl_cfg.algorithm.upper()} for {rl_cfg.max_iterations} iterations")
 
     # Setup
     env = ManagerBasedRlEnv(cfg=env_cfg)
-    wrapped = SkrlWrapper(env, device=device)
-    agent = _build_agent(wrapped, rl_cfg, device, total_timesteps=rl_cfg.timesteps)
-
-    # Iteration logger
-    rollout_steps = rl_cfg.ppo.rollouts if rl_cfg.algorithm == "ppo" else rl_cfg.rollout_steps
-    max_iters = max(1, (rl_cfg.timesteps + rollout_steps - 1) // rollout_steps)
-
-    if rl_cfg.timesteps < rollout_steps:
-        logger.warning(f"timesteps ({rl_cfg.timesteps}) < rollout_steps ({rollout_steps})")
+    wrapped = SkrlWrapper(env, device=device, clip_actions=rl_cfg.clip_actions)
+    agent = _build_agent(wrapped, rl_cfg, device)
 
     iter_logger = IterationLogger(
         cfg=IterationLoggerCfg(
@@ -327,7 +325,7 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu") -
             wandb_entity=rl_cfg.wandb_entity,
             experiment_name=rl_cfg.experiment_name,
         ),
-        max_iterations=max_iters,
+        max_iterations=rl_cfg.max_iterations,
     )
 
     # Log hyperparameters to wandb
@@ -335,9 +333,9 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu") -
         {
             "device": device,
             "algorithm": rl_cfg.algorithm,
-            "timesteps": rl_cfg.timesteps,
+            "max_iterations": rl_cfg.max_iterations,
+            "num_steps_per_env": num_steps_per_env,
             "seed": rl_cfg.seed,
-            "rollout_steps": rollout_steps,
             # RL config
             "rl": _cfg_to_dict(rl_cfg),
             # Env config (excluding non-serializable fields)
@@ -361,17 +359,17 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu") -
     timestep, iteration = 0, 0
     ep_reward, ep_length = 0.0, 0
 
-    while timestep < rl_cfg.timesteps:
+    while iteration < rl_cfg.max_iterations:
         iteration += 1
         ep_rewards, ep_lengths = [], []
         t0 = time.time()
         steps = 0
 
-        while steps < rollout_steps and timestep < rl_cfg.timesteps:
-            agent.pre_interaction(timestep=timestep, timesteps=rl_cfg.timesteps)
+        while steps < num_steps_per_env:
+            agent.pre_interaction(timestep=timestep, timesteps=total_timesteps)
 
             with torch.no_grad():
-                actions = agent.act(states, timestep=timestep, timesteps=rl_cfg.timesteps)[0]
+                actions = agent.act(states, timestep=timestep, timesteps=total_timesteps)[0]
                 next_states, rewards, terminated, truncated, _ = wrapped.step(actions)
 
                 agent.record_transition(
@@ -383,7 +381,7 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu") -
                     truncated=truncated,
                     infos={},
                     timestep=timestep,
-                    timesteps=rl_cfg.timesteps,
+                    timesteps=total_timesteps,
                 )
 
                 ep_reward += rewards.item()
@@ -397,7 +395,7 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu") -
                 else:
                     states = next_states
 
-            agent.post_interaction(timestep=timestep, timesteps=rl_cfg.timesteps)
+            agent.post_interaction(timestep=timestep, timesteps=total_timesteps)
             timestep += 1
             steps += 1
 
@@ -441,13 +439,13 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu") -
     logger.info("Training complete")
 
 
-def load_agent(checkpoint_path: str, env_cfg: ManagerBasedRlEnvCfg, rl_cfg: SkrlCfg, device: str = "cpu"):
+def load_agent(checkpoint_path: str, env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu"):
     """Load a trained agent from checkpoint."""
     from ..envs import ManagerBasedRlEnv
     from .wrapper import SkrlWrapper
 
     env = ManagerBasedRlEnv(cfg=env_cfg)
-    wrapped = SkrlWrapper(env, device=device)
-    agent = _build_agent(wrapped, rl_cfg, device, total_timesteps=rl_cfg.timesteps)
+    wrapped = SkrlWrapper(env, device=device, clip_actions=rl_cfg.clip_actions)
+    agent = _build_agent(wrapped, rl_cfg, device)
     agent.load(checkpoint_path)
     return agent, wrapped

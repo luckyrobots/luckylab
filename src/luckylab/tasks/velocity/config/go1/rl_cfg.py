@@ -1,38 +1,36 @@
 """Unitree Go1 RL configuration for velocity task."""
 
-from luckylab.rl.config import ActorCriticCfg, PpoCfg, SacCfg, SkrlCfg
+from luckylab.rl.config import ActorCriticCfg, PpoAlgorithmCfg, RlRunnerCfg, SacAlgorithmCfg
 
-UNITREE_GO1_PPO_RUNNER_CFG = SkrlCfg(
+UNITREE_GO1_PPO_RUNNER_CFG = RlRunnerCfg(
     algorithm="ppo",
     seed=42,
-    timesteps=1_000_000,
+    max_iterations=1500,
     policy=ActorCriticCfg(
         actor_hidden_dims=(512, 256, 128),
         critic_hidden_dims=(512, 256, 128),
         activation="elu",
         init_noise_std=1.0,
-        # Observation normalization (matches mjlab)
-        normalize_actor_obs=False,  # mjlab default is False
-        normalize_critic_obs=False,  # mjlab default is False
+        actor_obs_normalization=False,
+        critic_obs_normalization=False,
     ),
-    ppo=PpoCfg(
-        rollouts=1024,
-        learning_epochs=5,
-        mini_batches=4,
-        discount_factor=0.99,
-        lambda_gae=0.95,
+    ppo=PpoAlgorithmCfg(
+        num_steps_per_env=24,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        gamma=0.99,
+        lam=0.95,
         learning_rate=1e-3,
-        ratio_clip=0.2,
-        value_loss_scale=1.0,
-        entropy_loss_scale=0.01,
-        grad_norm_clip=1.0,
-        # KL early stopping and adaptive LR (matches mjlab's desired_kl=0.01)
-        kl_threshold=0.01,
-        lr_schedule="adaptive",
+        clip_param=0.2,
+        value_loss_coef=1.0,
+        entropy_coef=0.01,
+        max_grad_norm=1.0,
+        desired_kl=0.01,
+        schedule="adaptive",
     ),
     experiment_name="go1_velocity",
     directory="runs",
-    checkpoint_interval=10000,
+    save_interval=50,
     logger="wandb",
     wandb_project="luckylab",
     wandb_entity="mjlab",
@@ -40,35 +38,38 @@ UNITREE_GO1_PPO_RUNNER_CFG = SkrlCfg(
 
 # SAC configuration for Go1 velocity task
 # SAC is sample-efficient and good for single-env training
-UNITREE_GO1_SAC_RUNNER_CFG = SkrlCfg(
+UNITREE_GO1_SAC_RUNNER_CFG = RlRunnerCfg(
     algorithm="sac",
     seed=42,
-    timesteps=1_000_000,
+    max_iterations=50000,
     memory_size=1_000_000,  # Large replay buffer for off-policy learning
-    rollout_steps=1,  # SAC typically updates every step
     policy=ActorCriticCfg(
         actor_hidden_dims=(256, 256, 256),  # Standard SAC architecture
         critic_hidden_dims=(256, 256, 256),
         activation="relu",  # ReLU is standard for SAC
         init_noise_std=1.0,
     ),
-    sac=SacCfg(
+    sac=SacAlgorithmCfg(
         batch_size=256,
         discount_factor=0.99,
         polyak=0.005,  # Soft target update
-        actor_learning_rate=3e-4,
-        critic_learning_rate=3e-4,
-        learn_entropy=True,  # Auto-tune entropy coefficient
-        initial_entropy=0.2,  # Reasonable starting point
-        target_entropy=None,  # Auto-compute as -dim(action)
+        actor_learning_rate=1e-4,  # Lower LR for stability
+        critic_learning_rate=1e-4,  # Lower LR for stability
+        learn_entropy=False,  # Fixed entropy for stability (auto-tune can explode)
+        initial_entropy=0.2,  # Fixed entropy coefficient
+        target_entropy=-6.0,  # Less aggressive than -dim(action)=-12
         grad_norm_clip=1.0,  # Gradient clipping for stability
-        random_timesteps=10000,  # Random exploration before learning
-        learning_starts=1000,  # Wait for buffer to have some data
+        random_timesteps=1000,  # Random exploration before learning
+        learning_starts=1000,  # Should match random_timesteps so actor/critic train together
     ),
     experiment_name="go1_velocity_sac",
     directory="runs",
-    checkpoint_interval=10000,
+    save_interval=1000,
     logger="wandb",
     wandb_project="luckylab",
     wandb_entity="mjlab",
 )
+
+# Convenient aliases for train.py
+GO1_PPO_CFG = UNITREE_GO1_PPO_RUNNER_CFG
+GO1_SAC_CFG = UNITREE_GO1_SAC_RUNNER_CFG

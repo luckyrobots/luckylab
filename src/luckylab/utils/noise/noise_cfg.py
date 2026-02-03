@@ -1,130 +1,136 @@
-"""Noise configuration classes for domain randomization.
-
-Matches mjlab/utils/noise/noise_cfg.py.
-Uses torch tensors for GPU-native operations.
-"""
-
 from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
-from typing import Literal
+from typing import ClassVar, Literal
 
 import torch
+from typing_extensions import override
+
+from luckylab.utils.noise import noise_model
+
+
+def _ensure_tensor_device(
+  value: torch.Tensor | float, device: torch.device
+) -> torch.Tensor | float:
+  """Ensure tensor is on the correct device, leave scalars unchanged."""
+  if isinstance(value, torch.Tensor):
+    return value.to(device=device)
+  return value
 
 
 @dataclass(kw_only=True)
 class NoiseCfg(abc.ABC):
-    """Base configuration for a noise term."""
+  """Base configuration for a noise term."""
 
-    operation: Literal["add", "scale", "abs"] = "add"
-    """How to apply noise: 'add' (obs + noise), 'scale' (obs * noise), or 'abs' (replace with noise)."""
+  operation: Literal["add", "scale", "abs"] = "add"
 
-    @abc.abstractmethod
-    def apply(self, data: torch.Tensor) -> torch.Tensor:
-        """Apply noise to the input data.
+  @abc.abstractmethod
+  def apply(self, data: torch.Tensor) -> torch.Tensor:
+    """Apply noise to the input data."""
 
-        Args:
-            data: Input tensor to apply noise to.
 
-        Returns:
-            Noisy data tensor.
-        """
-        raise NotImplementedError
+@dataclass
+class ConstantNoiseCfg(NoiseCfg):
+  bias: torch.Tensor | float = 0.0
+
+  @override
+  def apply(self, data: torch.Tensor) -> torch.Tensor:
+    self.bias = _ensure_tensor_device(self.bias, data.device)
+
+    if self.operation == "add":
+      return data + self.bias
+    elif self.operation == "scale":
+      return data * self.bias
+    elif self.operation == "abs":
+      return torch.zeros_like(data) + self.bias
+    else:
+      raise ValueError(f"Unsupported noise operation: {self.operation}")
 
 
 @dataclass
 class UniformNoiseCfg(NoiseCfg):
-    """Uniform noise configuration.
+  n_min: torch.Tensor | float = -1.0
+  n_max: torch.Tensor | float = 1.0
 
-    Matches mjlab's UniformNoiseCfg API.
+  def __post_init__(self):
+    if isinstance(self.n_min, (int, float)) and isinstance(self.n_max, (int, float)):
+      if self.n_min >= self.n_max:
+        raise ValueError(f"n_min ({self.n_min}) must be less than n_max ({self.n_max})")
 
-    Args:
-        n_min: Lower bound of the uniform distribution.
-        n_max: Upper bound of the uniform distribution.
-        operation: How to apply noise ('add', 'scale', or 'abs').
+  @override
+  def apply(self, data: torch.Tensor) -> torch.Tensor:
+    self.n_min = _ensure_tensor_device(self.n_min, data.device)
+    self.n_max = _ensure_tensor_device(self.n_max, data.device)
 
-    Example:
-        # Additive uniform noise in [-0.1, 0.1]
-        noise = UniformNoiseCfg(n_min=-0.1, n_max=0.1)
+    # Generate uniform noise in [0, 1) and scale to [n_min, n_max).
+    noise = torch.rand_like(data) * (self.n_max - self.n_min) + self.n_min
 
-        # Multiplicative noise (scale by U[0.9, 1.1])
-        noise = UniformNoiseCfg(n_min=0.9, n_max=1.1, operation='scale')
-    """
-
-    n_min: torch.Tensor | float = -0.1
-    n_max: torch.Tensor | float = 0.1
-
-    def __post_init__(self):
-        if isinstance(self.n_min, (int, float)) and isinstance(self.n_max, (int, float)):
-            if self.n_min >= self.n_max:
-                raise ValueError(f"n_min ({self.n_min}) must be less than n_max ({self.n_max})")
-
-    def apply(self, data: torch.Tensor) -> torch.Tensor:
-        # Ensure bounds are on correct device
-        n_min = self.n_min
-        n_max = self.n_max
-        if isinstance(n_min, torch.Tensor):
-            n_min = n_min.to(device=data.device)
-        if isinstance(n_max, torch.Tensor):
-            n_max = n_max.to(device=data.device)
-
-        # Generate uniform noise in [0, 1) and scale to [n_min, n_max)
-        noise = torch.rand_like(data) * (n_max - n_min) + n_min
-
-        if self.operation == "add":
-            return data + noise
-        elif self.operation == "scale":
-            return data * noise
-        elif self.operation == "abs":
-            return noise
-        else:
-            raise ValueError(f"Unsupported noise operation: {self.operation}")
+    if self.operation == "add":
+      return data + noise
+    elif self.operation == "scale":
+      return data * noise
+    elif self.operation == "abs":
+      return noise
+    else:
+      raise ValueError(f"Unsupported noise operation: {self.operation}")
 
 
 @dataclass
 class GaussianNoiseCfg(NoiseCfg):
-    """Gaussian (normal) noise configuration.
+  mean: torch.Tensor | float = 0.0
+  std: torch.Tensor | float = 1.0
 
-    Matches mjlab's GaussianNoiseCfg API.
+  def __post_init__(self):
+    if isinstance(self.std, (int, float)) and self.std <= 0:
+      raise ValueError(f"std ({self.std}) must be positive")
 
-    Args:
-        mean: Mean of the Gaussian distribution.
-        std: Standard deviation of the Gaussian distribution.
-        operation: How to apply noise ('add', 'scale', or 'abs').
+  @override
+  def apply(self, data: torch.Tensor) -> torch.Tensor:
+    self.mean = _ensure_tensor_device(self.mean, data.device)
+    self.std = _ensure_tensor_device(self.std, data.device)
 
-    Example:
-        # Additive noise with std=0.1
-        noise = GaussianNoiseCfg(std=0.1)
+    # Generate standard normal noise and scale.
+    noise = self.mean + self.std * torch.randn_like(data)
 
-        # Multiplicative noise (scale by 1 + N(0, 0.05))
-        noise = GaussianNoiseCfg(mean=1.0, std=0.05, operation='scale')
-    """
+    if self.operation == "add":
+      return data + noise
+    elif self.operation == "scale":
+      return data * noise
+    elif self.operation == "abs":
+      return noise
+    else:
+      raise ValueError(f"Unsupported noise operation: {self.operation}")
 
-    mean: torch.Tensor | float = 0.0
-    std: torch.Tensor | float = 0.1
 
-    def __post_init__(self):
-        if isinstance(self.std, (int, float)) and self.std <= 0:
-            raise ValueError(f"std ({self.std}) must be positive")
+##
+# Noise models.
+##
 
-    def apply(self, data: torch.Tensor) -> torch.Tensor:
-        # Ensure parameters are on correct device
-        mean = self.mean
-        std = self.std
-        if isinstance(mean, torch.Tensor):
-            mean = mean.to(device=data.device)
-        if isinstance(std, torch.Tensor):
-            std = std.to(device=data.device)
 
-        # Generate standard normal noise and scale
-        noise = mean + std * torch.randn_like(data)
+@dataclass(kw_only=True)
+class NoiseModelCfg:
+  """Configuration for a noise model."""
 
-        if self.operation == "add":
-            return data + noise
-        elif self.operation == "scale":
-            return data * noise
-        elif self.operation == "abs":
-            return noise
-        else:
-            raise ValueError(f"Unsupported noise operation: {self.operation}")
+  noise_cfg: NoiseCfg
+
+  class_type: ClassVar[type[noise_model.NoiseModel]] = noise_model.NoiseModel
+
+  def __init_subclass__(cls, class_type: type[noise_model.NoiseModel]):
+    cls.class_type = class_type
+
+
+@dataclass(kw_only=True)
+class NoiseModelWithAdditiveBiasCfg(
+  NoiseModelCfg, class_type=noise_model.NoiseModelWithAdditiveBias
+):
+  """Configuration for an additive Gaussian noise with bias model."""
+
+  bias_noise_cfg: NoiseCfg | None = None
+  sample_bias_per_component: bool = True
+
+  def __post_init__(self):
+    if self.bias_noise_cfg is None:
+      raise ValueError(
+        "bias_noise_cfg must be specified for NoiseModelWithAdditiveBiasCfg"
+      )

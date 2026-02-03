@@ -15,8 +15,8 @@ Usage:
     # With W&B logging
     python -m luckylab.scripts.train --task go1_velocity_flat --logger wandb
 
-    # Custom timesteps and seed
-    python -m luckylab.scripts.train --task go1_velocity_flat --timesteps 500000 --seed 123
+    # Custom iterations and seed
+    python -m luckylab.scripts.train --task go1_velocity_flat --max-iterations 500 --seed 123
 
     # Connect to LuckyEngine at specific address
     python -m luckylab.scripts.train --task go1_velocity_flat --host localhost --port 50051
@@ -29,7 +29,7 @@ Examples:
     python -m luckylab.scripts.train --task go1_velocity_flat --algorithm sac --device cuda --logger wandb
 
     # Quick test run
-    python -m luckylab.scripts.train --task go1_velocity_flat --timesteps 1000
+    python -m luckylab.scripts.train --task go1_velocity_flat --max-iterations 10
 """
 
 import argparse
@@ -88,10 +88,10 @@ def main() -> int:
 
     # Training parameters
     parser.add_argument(
-        "--timesteps",
+        "--max-iterations",
         type=int,
         default=None,
-        help="Override total training timesteps",
+        help="Override maximum number of training iterations",
     )
     parser.add_argument(
         "--seed",
@@ -125,10 +125,10 @@ def main() -> int:
 
     # Checkpoint options
     parser.add_argument(
-        "--checkpoint-interval",
+        "--save-interval",
         type=int,
         default=None,
-        help="Override checkpoint save interval (timesteps)",
+        help="Override checkpoint save interval (iterations)",
     )
 
     args = parser.parse_args()
@@ -164,24 +164,24 @@ def main() -> int:
                     rl_cfg = copy.deepcopy(rl_cfg)
                     rl_cfg.algorithm = args.algorithm
                 else:
-                    from luckylab.rl import SkrlCfg
+                    from luckylab.rl import RlRunnerCfg
 
-                    rl_cfg = SkrlCfg(algorithm=args.algorithm)
+                    rl_cfg = RlRunnerCfg(algorithm=args.algorithm)
         except ImportError:
             rl_cfg = load_rl_cfg(args.task)
             if rl_cfg is not None:
                 rl_cfg = copy.deepcopy(rl_cfg)
                 rl_cfg.algorithm = args.algorithm
             else:
-                from luckylab.rl import SkrlCfg
+                from luckylab.rl import RlRunnerCfg
 
-                rl_cfg = SkrlCfg(algorithm=args.algorithm)
+                rl_cfg = RlRunnerCfg(algorithm=args.algorithm)
     else:
         rl_cfg = load_rl_cfg(args.task)
         if rl_cfg is None:
-            from luckylab.rl import SkrlCfg
+            from luckylab.rl import RlRunnerCfg
 
-            rl_cfg = SkrlCfg()
+            rl_cfg = RlRunnerCfg()
             logger.info("Using default RL configuration")
         else:
             rl_cfg = copy.deepcopy(rl_cfg)
@@ -195,9 +195,9 @@ def main() -> int:
         env_cfg.port = args.port
         logger.info(f"Using port: {args.port}")
 
-    if args.timesteps is not None:
-        rl_cfg.timesteps = args.timesteps
-        logger.info(f"Overriding timesteps: {args.timesteps:,}")
+    if args.max_iterations is not None:
+        rl_cfg.max_iterations = args.max_iterations
+        logger.info(f"Overriding max_iterations: {args.max_iterations:,}")
 
     if args.seed is not None:
         rl_cfg.seed = args.seed
@@ -214,8 +214,8 @@ def main() -> int:
     if args.wandb_project is not None:
         rl_cfg.wandb_project = args.wandb_project
 
-    if args.checkpoint_interval is not None:
-        rl_cfg.checkpoint_interval = args.checkpoint_interval
+    if args.save_interval is not None:
+        rl_cfg.save_interval = args.save_interval
 
     # Print configuration summary
     logger.info("=" * 60)
@@ -225,7 +225,7 @@ def main() -> int:
     logger.info(f"  Algorithm: {rl_cfg.algorithm.upper()}")
     logger.info(f"  Device: {args.device}")
     logger.info(f"  LuckyEngine: {env_cfg.host}:{env_cfg.port}")
-    logger.info(f"  Timesteps: {rl_cfg.timesteps:,}")
+    logger.info(f"  Max Iterations: {rl_cfg.max_iterations:,}")
     logger.info(f"  Seed: {rl_cfg.seed}")
     logger.info(f"  Experiment: {rl_cfg.experiment_name}")
     logger.info(f"  Logger: {rl_cfg.logger}")

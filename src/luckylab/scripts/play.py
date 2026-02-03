@@ -91,9 +91,9 @@ def main() -> int:
 
     rl_cfg = load_rl_cfg(args.task)
     if rl_cfg is None:
-        from luckylab.rl import SkrlCfg
+        from luckylab.rl import RlRunnerCfg
 
-        rl_cfg = SkrlCfg()
+        rl_cfg = RlRunnerCfg()
         logger.info("Using default RL configuration")
     else:
         rl_cfg = copy.deepcopy(rl_cfg)

@@ -1,12 +1,3 @@
-"""Manager-based RL environment.
-
-This module defines both the configuration and implementation for manager-based
-RL environments, following the mjlab pattern where all MDP components are
-config-driven with direct function references.
-
-Uses torch tensors for GPU compatibility.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -152,7 +143,7 @@ class ManagerBasedRlEnv:
         self.luckyrobots = LuckyRobots(host=cfg.host, port=cfg.port)
 
         # Episode state (per-env tensors for multi-env support)
-        self.step_count = torch.zeros(self._num_envs, dtype=torch.int64, device=self._device)
+        self.episode_length_buf = torch.zeros(self._num_envs, dtype=torch.int64, device=self._device)
         self.common_step_counter = 0  # Total steps across all episodes (for curriculum)
         self.current_action: torch.Tensor | None = None
         self.last_action: torch.Tensor | None = None
@@ -180,6 +171,7 @@ class ManagerBasedRlEnv:
 
         # Initialize scene with robot entity (mjlab pattern: env.scene["robot"].data.*)
         joint_names = self._get_joint_names()
+        actuator_names = self._get_actuator_names()
         self.scene = Scene()
         robot_entity = Entity(
             cfg=EntityCfg(),
@@ -187,6 +179,7 @@ class ManagerBasedRlEnv:
             num_joints=self.num_joints,
             joint_names=joint_names,
             device=self._device,
+            actuator_names=actuator_names,
         )
         self.scene.add("robot", robot_entity)
 
@@ -369,6 +362,23 @@ class ManagerBasedRlEnv:
         action_limits = robot_config["action_space"]["actuator_limits"]
         return [limit.get("name", f"joint_{i}") for i, limit in enumerate(action_limits)]
 
+    def _get_actuator_names(self) -> list[str]:
+        """Get actuator names from robot config.
+
+        Returns actuator names from action_space.actuator_names if available,
+        otherwise falls back to names from action_space.actuator_limits.
+        """
+        robot_config = LuckyRobots.get_robot_config(self.cfg.robot)
+        action_space = robot_config["action_space"]
+
+        # Prefer explicit actuator_names list if available
+        if "actuator_names" in action_space:
+            return list(action_space["actuator_names"])
+
+        # Fall back to names from actuator_limits
+        action_limits = action_space["actuator_limits"]
+        return [limit.get("name", f"actuator_{i}") for i, limit in enumerate(action_limits)]
+
     def _start_or_connect(self) -> None:
         """Launch LuckyEngine or connect to existing instance."""
         if self.cfg.skip_launch:
@@ -466,7 +476,7 @@ class ManagerBasedRlEnv:
         self.curriculum_manager.compute(env_ids)
 
         # Reset episode state
-        self.step_count[env_ids] = 0
+        self.episode_length_buf[env_ids] = 0
         self.current_action = None
         self.last_action = None
         self.episode_metrics.reset()
@@ -522,7 +532,7 @@ class ManagerBasedRlEnv:
         if action.dim() == 1:
             action = action.unsqueeze(0)
 
-        self.step_count[env_idx] += 1
+        self.episode_length_buf[env_idx] += 1
         self.common_step_counter += 1  # Track total steps for curriculum
 
         if self.current_action is not None:
@@ -587,7 +597,7 @@ class ManagerBasedRlEnv:
             obs = obs.unsqueeze(0)  # Ensure (num_envs, obs_dim) shape
 
         # Check truncation (timeout) - shape: (num_envs,)
-        truncated = self.step_count >= self.cfg.max_episode_length
+        truncated = self.episode_length_buf >= self.cfg.max_episode_length
 
         # Update episode metrics (using env_idx=0 for single env metrics tracking)
         self.episode_metrics.add_step()
@@ -633,7 +643,7 @@ class ManagerBasedRlEnv:
         metrics = {
             f"{prefix}/total_steps": float(self.common_step_counter),
             f"{prefix}/total_episodes": float(self.episode_count),
-            f"{prefix}/current_episode_length": float(self.step_count[0].item()),
+            f"{prefix}/current_episode_length": float(self.episode_length_buf[0].item()),
         }
 
         if self.reward_manager is not None:

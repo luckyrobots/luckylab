@@ -25,7 +25,7 @@ OBSERVATION_CLIP_RANGES: dict[str, tuple[float, float]] = {
     "projected_gravity": (-1.0, 1.0),
     "joint_pos": (-3.14159, 3.14159),
     "joint_vel": (-30.0, 30.0),
-    # Privileged observations (singular names matching mjlab)
+    # Privileged observations
     "foot_contact": (0.0, 1.0),
     "foot_height": (-1.0, 1.0),
     "foot_contact_forces": (0.0, 500.0),
