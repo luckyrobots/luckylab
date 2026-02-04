@@ -21,7 +21,6 @@ class JointAction(ActionTerm):
     def __init__(self, cfg: actions_config.JointActionCfg, env: ManagerBasedRlEnv):
         super().__init__(cfg=cfg, env=env)
 
-        # Find joints by actuator names (matches mjlab pattern)
         joint_ids, joint_names = self._asset.find_joints_by_actuator_names(
             cfg.actuator_names
         )
@@ -79,14 +78,6 @@ class JointAction(ActionTerm):
     @property
     def action_dim(self) -> int:
         return self._action_dim
-
-    @property
-    def joint_ids(self) -> torch.Tensor:
-        return self._joint_ids
-
-    @property
-    def joint_names(self) -> list[str]:
-        return self._joint_names
     
     def process_actions(self, actions: torch.Tensor) -> None:
         self._raw_actions[:] = actions

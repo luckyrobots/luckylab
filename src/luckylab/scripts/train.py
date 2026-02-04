@@ -1,57 +1,26 @@
 #!/usr/bin/env python3
 """
-Train a policy using skrl with PyTorch.
+Train a policy using skrl.
 
 Usage:
-    # PPO training (default)
     python -m luckylab.scripts.train --task go1_velocity_flat
-
-    # SAC training
     python -m luckylab.scripts.train --task go1_velocity_flat --algorithm sac
-
-    # With GPU
     python -m luckylab.scripts.train --task go1_velocity_flat --device cuda
-
-    # With W&B logging
-    python -m luckylab.scripts.train --task go1_velocity_flat --logger wandb
-
-    # Custom iterations and seed
     python -m luckylab.scripts.train --task go1_velocity_flat --max-iterations 500 --seed 123
-
-    # Connect to LuckyEngine at specific address
-    python -m luckylab.scripts.train --task go1_velocity_flat --host localhost --port 50051
-
-Examples:
-    # Basic PPO training
-    python -m luckylab.scripts.train --task go1_velocity_flat
-
-    # SAC training on GPU with W&B
-    python -m luckylab.scripts.train --task go1_velocity_flat --algorithm sac --device cuda --logger wandb
-
-    # Quick test run
-    python -m luckylab.scripts.train --task go1_velocity_flat --max-iterations 10
 """
 
 import argparse
 import copy
-import logging
 import sys
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+from luckylab.utils.logging import print_header, print_info
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Train a reinforcement learning policy using skrl.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
     )
 
-    # Task and algorithm
     parser.add_argument(
         "--task",
         type=str,
@@ -71,177 +40,122 @@ def main() -> int:
         default="cpu",
         help="Device to run training on (default: cpu)",
     )
-
-    # LuckyEngine connection
-    parser.add_argument(
-        "--host",
-        type=str,
-        default=None,
-        help="LuckyEngine gRPC host address (default: from task config)",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help="LuckyEngine gRPC port (default: from task config)",
-    )
-
-    # Training parameters
     parser.add_argument(
         "--max-iterations",
         type=int,
         default=None,
-        help="Override maximum number of training iterations",
+        help="Maximum number of training iterations",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=None,
-        help="Override random seed for reproducibility",
+        help="Random seed for reproducibility",
     )
-
-    # Experiment naming
     parser.add_argument(
-        "--experiment-name",
+        "--host",
         type=str,
         default=None,
-        help="Override experiment name for logging",
+        help="LuckyEngine gRPC host address",
     )
-
-    # Logging options
     parser.add_argument(
-        "--logger",
-        type=str,
+        "--port",
+        type=int,
         default=None,
-        choices=["wandb"],
-        help="Logger backend (default: wandb)",
+        help="LuckyEngine gRPC port",
+    )
+    parser.add_argument(
+        "--wandb",
+        action="store_true",
+        default=None,
+        help="Enable wandb logging",
+    )
+    parser.add_argument(
+        "--no-wandb",
+        action="store_true",
+        help="Disable wandb logging",
     )
     parser.add_argument(
         "--wandb-project",
         type=str,
         default=None,
-        help="W&B project name (default: luckylab)",
+        help="W&B project name",
     )
-
-    # Checkpoint options
     parser.add_argument(
-        "--save-interval",
-        type=int,
+        "--wandb-entity",
+        type=str,
         default=None,
-        help="Override checkpoint save interval (iterations)",
+        help="W&B entity (team/user)",
     )
 
     args = parser.parse_args()
 
-    # Import here to avoid slow imports when just checking --help
-    from luckylab.rl import train
+    from luckylab.rl import RlRunnerCfg, train
     from luckylab.tasks import load_env_cfg, load_rl_cfg
 
-    # Load configurations
-    logger.info(f"Loading task: {args.task}")
+    # Load environment config
+    print_info(f"Loading task: {args.task}")
     try:
         env_cfg = load_env_cfg(args.task)
     except KeyError as e:
-        logger.error(str(e))
+        print_info(str(e), color="red")
         return 1
 
-    # Load algorithm-specific config if algorithm is specified
-    if args.algorithm is not None:
-        # Try to load algorithm-specific config (e.g., GO1_SAC_CFG for sac)
-        try:
-            from luckylab.tasks.velocity.config.go1.rl_cfg import GO1_PPO_CFG, GO1_SAC_CFG
-
-            algo_configs = {
-                "ppo": GO1_PPO_CFG,
-                "sac": GO1_SAC_CFG,
-            }
-            if args.algorithm in algo_configs:
-                rl_cfg = copy.deepcopy(algo_configs[args.algorithm])
-                logger.info(f"Loaded {args.algorithm.upper()} config for task")
-            else:
-                rl_cfg = load_rl_cfg(args.task)
-                if rl_cfg is not None:
-                    rl_cfg = copy.deepcopy(rl_cfg)
-                    rl_cfg.algorithm = args.algorithm
-                else:
-                    from luckylab.rl import RlRunnerCfg
-
-                    rl_cfg = RlRunnerCfg(algorithm=args.algorithm)
-        except ImportError:
-            rl_cfg = load_rl_cfg(args.task)
-            if rl_cfg is not None:
-                rl_cfg = copy.deepcopy(rl_cfg)
-                rl_cfg.algorithm = args.algorithm
-            else:
-                from luckylab.rl import RlRunnerCfg
-
-                rl_cfg = RlRunnerCfg(algorithm=args.algorithm)
+    # Load RL config for specified algorithm
+    algorithm = args.algorithm or "ppo"
+    rl_cfg = load_rl_cfg(args.task, algorithm)
+    if rl_cfg is None:
+        print_info(f"No RL config found for algorithm '{algorithm}', using defaults", color="yellow")
+        rl_cfg = RlRunnerCfg(algorithm=algorithm)
     else:
-        rl_cfg = load_rl_cfg(args.task)
-        if rl_cfg is None:
-            from luckylab.rl import RlRunnerCfg
-
-            rl_cfg = RlRunnerCfg()
-            logger.info("Using default RL configuration")
-        else:
-            rl_cfg = copy.deepcopy(rl_cfg)
-
-    # Apply env_cfg overrides (LuckyEngine connection)
-    if args.host is not None:
-        env_cfg.host = args.host
-        logger.info(f"Using host: {args.host}")
-
-    if args.port is not None:
-        env_cfg.port = args.port
-        logger.info(f"Using port: {args.port}")
+        rl_cfg = copy.deepcopy(rl_cfg)
 
     if args.max_iterations is not None:
         rl_cfg.max_iterations = args.max_iterations
-        logger.info(f"Overriding max_iterations: {args.max_iterations:,}")
 
     if args.seed is not None:
         rl_cfg.seed = args.seed
-        logger.info(f"Overriding seed: {args.seed}")
 
-    if args.experiment_name is not None:
-        rl_cfg.experiment_name = args.experiment_name
-        logger.info(f"Overriding experiment name: {args.experiment_name}")
+    if args.host is not None:
+        env_cfg.host = args.host
 
-    if args.logger is not None:
-        rl_cfg.logger = args.logger
-        logger.info(f"Using logger: {args.logger}")
+    if args.port is not None:
+        env_cfg.port = args.port
+
+    if args.wandb:
+        rl_cfg.wandb = True
+    elif args.no_wandb:
+        rl_cfg.wandb = False
 
     if args.wandb_project is not None:
         rl_cfg.wandb_project = args.wandb_project
 
-    if args.save_interval is not None:
-        rl_cfg.save_interval = args.save_interval
+    if args.wandb_entity is not None:
+        rl_cfg.wandb_entity = args.wandb_entity
 
-    # Print configuration summary
-    logger.info("=" * 60)
-    logger.info("Training Configuration")
-    logger.info("=" * 60)
-    logger.info(f"  Task: {args.task}")
-    logger.info(f"  Algorithm: {rl_cfg.algorithm.upper()}")
-    logger.info(f"  Device: {args.device}")
-    logger.info(f"  LuckyEngine: {env_cfg.host}:{env_cfg.port}")
-    logger.info(f"  Max Iterations: {rl_cfg.max_iterations:,}")
-    logger.info(f"  Seed: {rl_cfg.seed}")
-    logger.info(f"  Experiment: {rl_cfg.experiment_name}")
-    logger.info(f"  Logger: {rl_cfg.logger}")
-    logger.info("=" * 60)
+    # Log configuration
+    print_header("Training Configuration")
+    print_info(f"  Task:           {args.task}")
+    print_info(f"  Algorithm:      {rl_cfg.algorithm.upper()}")
+    print_info(f"  Device:         {args.device}")
+    print_info(f"  Max Iterations: {rl_cfg.max_iterations:,}")
+    print_info(f"  Seed:           {rl_cfg.seed}")
+    print_info(f"  LuckyEngine:    {env_cfg.host}:{env_cfg.port}")
+    print_info(f"  Wandb:          {rl_cfg.wandb}")
+    if rl_cfg.wandb:
+        print_info(f"  Wandb Project:  {rl_cfg.wandb_project}")
 
-    # Run training
+    # Train
     try:
         train(env_cfg=env_cfg, rl_cfg=rl_cfg, device=args.device)
-        logger.info("Training complete!")
+        print_info("Training complete!")
         return 0
     except KeyboardInterrupt:
-        logger.info("Training interrupted by user")
+        print_info("Training interrupted by user", color="yellow")
         return 130
     except Exception as e:
-        logger.exception(f"Training failed: {e}")
-        return 1
+        print_info(f"Training failed: {e}", color="red")
+        raise
 
 
 if __name__ == "__main__":

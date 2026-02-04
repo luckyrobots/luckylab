@@ -63,6 +63,9 @@ Homepage = "https://github.com/luckyrobots/luckylab"
 Repository = "https://github.com/luckyrobots/luckylab"
 Issues = "https://github.com/luckyrobots/luckylab/issues"
 
+[project.entry-points."luckylab.tasks"]
+velocity = "luckylab.tasks"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/luckylab"]
 

@@ -1,7 +1,7 @@
 """skrl configuration."""
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Tuple
+from typing import Literal
 
 
 @dataclass
@@ -16,9 +16,9 @@ class ActorCriticCfg:
     """Whether to normalize the observation for the actor network. Default is False."""
     critic_obs_normalization: bool = False
     """Whether to normalize the observation for the critic network. Default is False."""
-    actor_hidden_dims: Tuple[int, ...] = (128, 128, 128)
+    actor_hidden_dims: tuple[int, ...] = (128, 128, 128)
     """The hidden dimensions of the actor network."""
-    critic_hidden_dims: Tuple[int, ...] = (128, 128, 128)
+    critic_hidden_dims: tuple[int, ...] = (128, 128, 128)
     """The hidden dimensions of the critic network."""
     activation: str = "elu"
     """The activation function to use in the actor and critic networks."""
@@ -167,20 +167,15 @@ class RlRunnerCfg:
     """The experiment name."""
     directory: str = "runs"
     """Output directory."""
-    save_interval: int = 50
-    """The number of iterations between saves."""
+    checkpoint_interval: int = 100
+    """Save checkpoint every N iterations (0 to disable)."""
+    log_interval: int = 10
+    """Log metrics every N iterations (0 to disable)."""
 
     # Logging
-    logger: Literal["wandb"] | None = "wandb"
-    """Logger backend (None = disabled)."""
+    wandb: bool = True
+    """Enable wandb logging."""
     wandb_project: str = "luckylab"
     """W&B project name."""
-    wandb_entity: str | None = "mjlab"
+    wandb_entity: str | None = None
     """W&B entity (team/user name)."""
-
-    # Scope for simultaneous training
-    scope: str | None = None
-    """
-    Scope name for simultaneous training.
-    Multiple agents with different scopes can train in parallel on the same env.
-    """

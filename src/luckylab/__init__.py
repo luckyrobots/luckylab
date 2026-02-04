@@ -1,15 +1,24 @@
 """LuckyLab - RL training framework for LuckyRobots."""
 
-from gymnasium.envs.registration import register
+from importlib.metadata import entry_points
+from pathlib import Path
 
-from luckylab.envs import ManagerBasedRlEnv as ManagerBasedRlEnv
-from luckylab.envs import ManagerBasedRlEnvCfg as ManagerBasedRlEnvCfg
-from luckylab.tasks.velocity import GO1_ENV_CFG as GO1_ENV_CFG
+LUCKYLAB_SRC_PATH: Path = Path(__file__).parent
 
-# Register Gymnasium environment
-register(
-    id="luckylab/Go1-Velocity-v0",
-    entry_point="luckylab.envs:ManagerBasedRlEnv",
-    max_episode_steps=GO1_ENV_CFG.max_episode_length,
-    kwargs={"cfg": GO1_ENV_CFG},
-)
+
+def _import_registered_packages() -> None:
+    """Auto-discover and import packages registered via entry points.
+
+    Looks for packages registered under the 'luckylab.tasks' entry point group.
+    Each discovered package is imported, which allows it to register custom
+    environments with the task registry.
+    """
+    luckylab_tasks = entry_points().select(group="luckylab.tasks")
+    for entry_point in luckylab_tasks:
+        try:
+            entry_point.load()
+        except Exception as e:
+            print(f"[WARN] Failed to load task package {entry_point.name}: {e}")
+
+
+_import_registered_packages()

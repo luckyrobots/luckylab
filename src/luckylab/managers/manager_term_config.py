@@ -47,7 +47,7 @@ class CommandTermCfg:
     """Configuration for a command generator term."""
 
     class_type: type[CommandTerm]
-    resampling_time_range: tuple[float, float] = (5.0, 10.0)
+    resampling_time_range: tuple[float, float]
     debug_vis: bool = False
 
 
@@ -118,8 +118,8 @@ class ObservationGroupCfg:
     concatenate_terms: bool = True
     concatenate_dim: int = -1
     enable_corruption: bool = True
-    history_length: int = 1
-    flatten_history: bool = True
+    history_length: int | None = None
+    flatten_history_dim: bool = True
 
 
 ##

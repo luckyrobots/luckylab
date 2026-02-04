@@ -20,16 +20,11 @@ Examples:
 
 import argparse
 import copy
-import logging
 import sys
 
 import numpy as np
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+from luckylab.utils.logging import print_header, print_info
 
 
 def main() -> int:
@@ -82,29 +77,27 @@ def main() -> int:
     from luckylab.tasks import load_env_cfg, load_rl_cfg
 
     # Load configurations
-    logger.info(f"Loading task: {args.task}")
+    print_info(f"Loading task: {args.task}")
     try:
         env_cfg = load_env_cfg(args.task)
     except KeyError as e:
-        logger.error(str(e))
+        print_info(str(e), color="red")
         return 1
 
-    rl_cfg = load_rl_cfg(args.task)
+    # Determine algorithm (from checkpoint or CLI)
+    algorithm = args.algorithm or "ppo"
+    rl_cfg = load_rl_cfg(args.task, algorithm)
     if rl_cfg is None:
         from luckylab.rl import RlRunnerCfg
 
-        rl_cfg = RlRunnerCfg()
-        logger.info("Using default RL configuration")
+        rl_cfg = RlRunnerCfg(algorithm=algorithm)
+        print_info(f"Using default RL configuration for {algorithm.upper()}")
     else:
         rl_cfg = copy.deepcopy(rl_cfg)
-
-    # Apply CLI overrides
-    if args.algorithm is not None:
-        rl_cfg.algorithm = args.algorithm
-        logger.info(f"Using algorithm: {args.algorithm}")
+        print_info(f"Using {algorithm.upper()} configuration")
 
     # Load checkpoint
-    logger.info(f"Loading checkpoint: {args.checkpoint}")
+    print_info(f"Loading checkpoint: {args.checkpoint}")
     try:
         agent, wrapped_env = load_agent(
             checkpoint_path=args.checkpoint,
@@ -113,11 +106,11 @@ def main() -> int:
             device=args.device,
         )
     except FileNotFoundError:
-        logger.error(f"Checkpoint not found: {args.checkpoint}")
+        print_info(f"Checkpoint not found: {args.checkpoint}", color="red")
         return 1
 
     # Run evaluation
-    logger.info(f"Running evaluation for {args.episodes} episodes...")
+    print_info(f"Running evaluation for {args.episodes} episodes...")
     episode_rewards = []
     episode_lengths = []
 
@@ -138,29 +131,27 @@ def main() -> int:
 
             episode_rewards.append(total_reward)
             episode_lengths.append(steps)
-            logger.info(f"Episode {ep + 1}: reward={total_reward:.2f}, length={steps}")
+            print_info(f"Episode {ep + 1}: reward={total_reward:.2f}, length={steps}")
 
     except KeyboardInterrupt:
-        logger.info("Evaluation interrupted by user")
+        print_info("Evaluation interrupted by user", color="yellow")
         wrapped_env.close()
         return 130
 
     # Print results
-    print("\n" + "=" * 50)
-    print("Evaluation Results")
-    print("=" * 50)
-    print(f"Algorithm:     {rl_cfg.algorithm.upper()}")
-    print(f"Episodes:      {args.episodes}")
-    print(f"Mean Reward:   {np.mean(episode_rewards):.2f}")
-    print(f"Std Reward:    {np.std(episode_rewards):.2f}")
-    print(f"Min Reward:    {np.min(episode_rewards):.2f}")
-    print(f"Max Reward:    {np.max(episode_rewards):.2f}")
-    print(f"Mean Length:   {np.mean(episode_lengths):.1f}")
-    print("=" * 50)
+    print()
+    print_header("Evaluation Results")
+    print_info(f"  Algorithm:     {rl_cfg.algorithm.upper()}")
+    print_info(f"  Episodes:      {args.episodes}")
+    print_info(f"  Mean Reward:   {np.mean(episode_rewards):.2f}")
+    print_info(f"  Std Reward:    {np.std(episode_rewards):.2f}")
+    print_info(f"  Min Reward:    {np.min(episode_rewards):.2f}")
+    print_info(f"  Max Reward:    {np.max(episode_rewards):.2f}")
+    print_info(f"  Mean Length:   {np.mean(episode_lengths):.1f}")
 
     # Cleanup
     wrapped_env.close()
-    logger.info("Evaluation complete!")
+    print_info("Evaluation complete!")
     return 0
 
 

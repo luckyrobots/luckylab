@@ -22,7 +22,7 @@ def main():
         print(f"    Robot: {cfg.robot}")
         print(f"    Scene: {cfg.scene}")
         print(f"    Task:  {cfg.task}")
-        print(f"    Max Episode Length: {cfg.max_episode_length}")
+        print(f"    Episode Length: {cfg.episode_length_s}s")
 
     print("\n" + "=" * 60)
     print("Gymnasium Environments")

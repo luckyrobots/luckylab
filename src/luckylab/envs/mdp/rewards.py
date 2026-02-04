@@ -27,10 +27,10 @@ def is_terminated(env: ManagerBasedRlEnv) -> torch.Tensor:
   return env.termination_manager.terminated.float()
 
 
-# TODO: Missing joint_torques_l2 penalty
+# TODO: Missing joint_torques_l2
 
 
-# TODO: Missing joint_acc_l2 penalty
+# TODO: Missing joint_acc_l2
 
 
 def action_rate_l2(env: ManagerBasedRlEnv) -> torch.Tensor:

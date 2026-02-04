@@ -32,6 +32,6 @@ def bad_orientation(
   return torch.acos(-projected_gravity[:, 2]).abs() > limit_angle
 
 
-# TODO: Missing root_height_below_minimum termination
+# TODO: Missing root_height_below_minimum
 
-# TODO: Missing nan_detection termination
+# TODO: Missing nan_detection

@@ -83,7 +83,14 @@ class ActionManager(ManagerBase):
     @property
     def prev_action(self) -> torch.Tensor:
         return self._prev_action
-    
+
+    @property
+    def processed_action(self) -> torch.Tensor:
+        """Concatenated processed actions from all terms."""
+        return torch.cat(
+            [term._processed_actions for term in self._terms.values()], dim=-1
+        )
+
     @property
     def active_terms(self) -> list[str]:
         return self._term_names
@@ -115,8 +122,8 @@ class ActionManager(ManagerBase):
         idx = 0
         for term in self._terms.values():
             term_actions = action[:, idx : idx + term.action_dim]
-        term.process_actions(term_actions)
-        idx += term.action_dim
+            term.process_actions(term_actions)
+            idx += term.action_dim
 
     def apply_action(self) -> None:
         for term in self._terms.values():
@@ -142,6 +149,6 @@ class ActionManager(ManagerBase):
             if term_cfg is None:
                 print(f"term: {term_name} set to None, skipping...")
                 continue
-        term = term_cfg.class_type(term_cfg, self._env)
-        self._term_names.append(term_name)
-        self._terms[term_name] = term
+            term = term_cfg.class_type(term_cfg, self._env)
+            self._term_names.append(term_name)
+            self._terms[term_name] = term

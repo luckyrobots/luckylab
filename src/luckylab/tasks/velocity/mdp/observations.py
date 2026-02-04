@@ -1,33 +1,49 @@
-"""Observation functions and utilities for velocity task.
+from __future__ import annotations
 
-Re-exports observation functions from envs.mdp.observations for use in
-velocity_env_cfg. Also provides observation clipping ranges.
-"""
+from typing import TYPE_CHECKING
 
-# Re-export observation functions from envs.mdp
-from luckylab.envs.mdp.observations import base_ang_vel as base_ang_vel
-from luckylab.envs.mdp.observations import base_lin_vel as base_lin_vel
-from luckylab.envs.mdp.observations import foot_air_time as foot_air_time
-from luckylab.envs.mdp.observations import foot_contact as foot_contact
-from luckylab.envs.mdp.observations import foot_contact_forces as foot_contact_forces
-from luckylab.envs.mdp.observations import foot_height as foot_height
-from luckylab.envs.mdp.observations import generated_commands as generated_commands
-from luckylab.envs.mdp.observations import joint_pos as joint_pos
-from luckylab.envs.mdp.observations import joint_pos_rel as joint_pos_rel
-from luckylab.envs.mdp.observations import joint_vel as joint_vel
-from luckylab.envs.mdp.observations import joint_vel_rel as joint_vel_rel
-from luckylab.envs.mdp.observations import last_action as last_action
-from luckylab.envs.mdp.observations import projected_gravity as projected_gravity
+import torch
 
-OBSERVATION_CLIP_RANGES: dict[str, tuple[float, float]] = {
-    "base_lin_vel": (-10.0, 10.0),
-    "base_ang_vel": (-20.0, 20.0),
-    "projected_gravity": (-1.0, 1.0),
-    "joint_pos": (-3.14159, 3.14159),
-    "joint_vel": (-30.0, 30.0),
-    # Privileged observations
-    "foot_contact": (0.0, 1.0),
-    "foot_height": (-1.0, 1.0),
-    "foot_contact_forces": (0.0, 500.0),
-    "foot_air_time": (0.0, 2.0),
-}
+from luckylab.entity import Entity
+from luckylab.managers.scene_entity_config import SceneEntityCfg
+
+if TYPE_CHECKING:
+    from luckylab.envs import ManagerBasedRlEnv
+
+_DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
+
+def foot_height(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Foot heights above ground. Shape (num_envs, 4)."""
+    asset: Entity = env.scene[asset_cfg.name]
+    return asset.data.foot_height
+
+
+def foot_air_time(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Time since last foot contact. Shape (num_envs, 4)."""
+    asset: Entity = env.scene[asset_cfg.name]
+    return asset.data.foot_air_time
+
+
+def foot_contact(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Foot contact states (binary). Shape (num_envs, 4)."""
+    asset: Entity = env.scene[asset_cfg.name]
+    return asset.data.foot_contact
+
+
+def foot_contact_forces(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Foot contact force magnitudes. Shape (num_envs, 4)."""
+    asset: Entity = env.scene[asset_cfg.name]
+    return asset.data.foot_contact_forces

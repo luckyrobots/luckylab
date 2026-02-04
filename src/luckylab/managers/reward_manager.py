@@ -11,7 +11,7 @@ from luckylab.managers.manager_base import ManagerBase
 from luckylab.managers.manager_term_config import RewardTermCfg
 
 if TYPE_CHECKING:
-  from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
+    from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 class RewardManager(ManagerBase):
@@ -102,8 +102,8 @@ class RewardManager(ManagerBase):
             if term_cfg is None:
                 print(f"term: {term_name} set to None, skipping...")
                 continue
-        self._resolve_common_term_cfg(term_name, term_cfg)
-        self._term_names.append(term_name)
-        self._term_cfgs.append(term_cfg)
-        if hasattr(term_cfg.func, "reset") and callable(term_cfg.func.reset):
-            self._class_term_cfgs.append(term_cfg)
+            self._resolve_common_term_cfg(term_name, term_cfg)
+            self._term_names.append(term_name)
+            self._term_cfgs.append(term_cfg)
+            if hasattr(term_cfg.func, "reset") and callable(term_cfg.func.reset):
+                self._class_term_cfgs.append(term_cfg)

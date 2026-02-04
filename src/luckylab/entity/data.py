@@ -18,6 +18,47 @@ logger = logging.getLogger(__name__)
 SetterFunc = Callable[["EntityData", torch.Tensor], None]
 
 
+# =============================================================================
+# Quaternion utilities
+# =============================================================================
+
+
+def quat_apply(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
+    """Apply a quaternion rotation to a vector.
+
+    Args:
+        quat: The quaternion in (w, x, y, z). Shape is (..., 4).
+        vec: The vector in (x, y, z). Shape is (..., 3).
+
+    Returns:
+        The rotated vector in (x, y, z). Shape is (..., 3).
+    """
+    shape = vec.shape
+    quat = quat.reshape(-1, 4)
+    vec = vec.reshape(-1, 3)
+    xyz = quat[:, 1:]
+    t = xyz.cross(vec, dim=-1) * 2
+    return (vec + quat[:, 0:1] * t + xyz.cross(t, dim=-1)).view(shape)
+
+
+def quat_apply_inverse(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
+    """Apply the inverse of a quaternion rotation to a vector.
+
+    Args:
+        quat: The quaternion in (w, x, y, z). Shape is (..., 4).
+        vec: The vector in (x, y, z). Shape is (..., 3).
+
+    Returns:
+        The rotated vector in (x, y, z). Shape is (..., 3).
+    """
+    shape = vec.shape
+    quat = quat.reshape(-1, 4)
+    vec = vec.reshape(-1, 3)
+    xyz = quat[:, 1:]
+    t = xyz.cross(vec, dim=-1) * 2
+    return (vec - quat[:, 0:1] * t + xyz.cross(t, dim=-1)).view(shape)
+
+
 @dataclass
 class ObservationSchema:
     """Schema defining how to parse observations from the agent.
@@ -117,7 +158,6 @@ class EntityData:
     """Data container for an entity.
 
     Stores robot state data received from LuckyEngine observations.
-    Properties match mjlab's EntityData for compatibility with reward/termination functions.
 
     The observation parsing is driven by an ObservationSchema which maps
     agent observation names to EntityData properties. This makes it general
@@ -126,6 +166,7 @@ class EntityData:
 
     num_envs: int
     device: torch.device
+    num_joints: int = 0
     joint_names: list[str] = field(default_factory=list)
     observation_schema: ObservationSchema = field(default_factory=ObservationSchema.default)
 
@@ -152,15 +193,19 @@ class EntityData:
         self._root_link_quat_w[:, 0] = 1.0  # Default identity quaternion (w, x, y, z)
         self._projected_gravity_b = torch.zeros(self.num_envs, 3, device=self.device)
         self._projected_gravity_b[:, 2] = -1.0  # Default upright orientation
-        self._joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
-        self._joint_vel = torch.zeros(self.num_envs, 0, device=self.device)
-        self._default_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
-        self._default_joint_vel = torch.zeros(self.num_envs, 0, device=self.device)
+        self._joint_pos = torch.zeros(self.num_envs, self.num_joints, device=self.device)
+        self._joint_vel = torch.zeros(self.num_envs, self.num_joints, device=self.device)
+        self._default_joint_pos = torch.zeros(self.num_envs, self.num_joints, device=self.device)
+        self._default_joint_vel = torch.zeros(self.num_envs, self.num_joints, device=self.device)
         # Privileged observation buffers (4 feet for quadrupeds: FR, FL, RR, RL)
         self._foot_contact = torch.zeros(self.num_envs, 4, device=self.device)
         self._foot_height = torch.zeros(self.num_envs, 4, device=self.device)
         self._foot_contact_forces = torch.zeros(self.num_envs, 4, device=self.device)
         self._foot_air_time = torch.zeros(self.num_envs, 4, device=self.device)
+
+        # Constants
+        self._gravity_vec_w = torch.tensor([[0.0, 0.0, -1.0]], device=self.device).expand(self.num_envs, -1)
+        self._forward_vec_b = torch.tensor([[1.0, 0.0, 0.0]], device=self.device).expand(self.num_envs, -1)
 
         # Property name -> buffer mapping for dynamic updates
         self._property_buffers: dict[str, torch.Tensor] = {
@@ -175,19 +220,6 @@ class EntityData:
             "foot_contact_forces": self._foot_contact_forces,
             "foot_air_time": self._foot_air_time,
         }
-
-    def set_num_joints(self, num_joints: int, joint_names: list[str] | None = None) -> None:
-        """Initialize joint buffers with correct size."""
-        self._joint_pos = torch.zeros(self.num_envs, num_joints, device=self.device)
-        self._joint_vel = torch.zeros(self.num_envs, num_joints, device=self.device)
-        self._default_joint_pos = torch.zeros(self.num_envs, num_joints, device=self.device)
-        self._default_joint_vel = torch.zeros(self.num_envs, num_joints, device=self.device)
-        if joint_names is not None:
-            self.joint_names = joint_names
-
-        # Update property buffer mapping
-        self._property_buffers["joint_pos"] = self._joint_pos
-        self._property_buffers["joint_vel"] = self._joint_vel
 
     def set_default_joint_pos(self, default_positions: list[float] | torch.Tensor) -> None:
         """Set the default joint positions.
@@ -265,6 +297,46 @@ class EntityData:
         """Time since last foot contact in seconds. Shape (num_envs, 4). Order: FR, FL, RR, RL."""
         return self._foot_air_time
 
+    # Derived properties (computed from base data, matching mjlab API)
+
+    @property
+    def gravity_vec_w(self) -> torch.Tensor:
+        """Gravity vector in world frame. Shape (num_envs, 3)."""
+        return self._gravity_vec_w
+
+    @property
+    def forward_vec_b(self) -> torch.Tensor:
+        """Forward direction vector in body frame. Shape (num_envs, 3)."""
+        return self._forward_vec_b
+
+    @property
+    def heading_w(self) -> torch.Tensor:
+        """Heading angle (yaw) in world frame. Shape (num_envs,).
+
+        Computed by rotating the body-frame forward vector to world frame
+        and extracting the yaw angle.
+        """
+        forward_w = quat_apply(self._root_link_quat_w, self._forward_vec_b)
+        return torch.atan2(forward_w[:, 1], forward_w[:, 0])
+
+    @property
+    def root_link_lin_vel_w(self) -> torch.Tensor:
+        """Root link linear velocity in world frame. Shape (num_envs, 3).
+
+        Computed by rotating body-frame velocity to world frame using
+        the root link quaternion.
+        """
+        return quat_apply(self._root_link_quat_w, self._root_link_lin_vel_b)
+
+    @property
+    def root_link_ang_vel_w(self) -> torch.Tensor:
+        """Root link angular velocity in world frame. Shape (num_envs, 3).
+
+        Computed by rotating body-frame angular velocity to world frame
+        using the root link quaternion.
+        """
+        return quat_apply(self._root_link_quat_w, self._root_link_ang_vel_b)
+
     # Aliases for compatibility with different naming conventions
 
     @property
@@ -296,6 +368,11 @@ class EntityData:
         Args:
             obs_tensor: Flat observation tensor from engine (obs_dim,) or (num_envs, obs_dim).
             observation_names: List of observation group names from agent schema.
+
+        Raises:
+            ValueError: If an observation name is not found in the schema. This is
+                required because we cannot determine the size to skip, which would
+                cause all subsequent observations to be misaligned.
         """
         # Ensure batch dimension
         if obs_tensor.dim() == 1:
@@ -308,11 +385,17 @@ class EntityData:
             # Get size and property from schema
             size = self.observation_schema.get_size(name, num_joints)
             if size == 0:
-                # Unknown observation - skip (or could log warning)
-                continue
+                # Unknown observation - we cannot skip it safely since we don't
+                # know its size. This would corrupt all subsequent observations.
+                raise ValueError(
+                    f"Unknown observation '{name}' not found in schema. "
+                    f"All observation names must be registered in ObservationSchema. "
+                    f"Available mappings: {list(self.observation_schema.mappings.keys())}"
+                )
 
             prop_name = self.observation_schema.get_property(name)
             if prop_name is None:
+                # Known size but no property mapping - skip the data
                 idx += size
                 continue
 
@@ -374,16 +457,3 @@ class EntityData:
             )
 
         return privileged_obs
-
-    def has_foot_data(self) -> bool:
-        """Check if any foot sensor data has been populated.
-
-        Returns:
-            True if any foot observation buffer has non-zero values.
-        """
-        return (
-            self._foot_contact.any().item()
-            or self._foot_height.any().item()
-            or self._foot_contact_forces.any().item()
-            or self._foot_air_time.any().item()
-        )

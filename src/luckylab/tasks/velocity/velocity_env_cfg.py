@@ -2,29 +2,25 @@
 
 This module defines the configuration for velocity tracking tasks.
 Robot-specific configurations are located in the config/ directory.
-
-This follows the mjlab pattern where the factory function returns
-a ManagerBasedRlEnvCfg directly with all MDP components configured.
-All reward/termination functions take `env` as first parameter.
 """
 
 import math
 
-from ...envs.manager_based_rl_env import ManagerBasedRlEnvCfg
-from ...envs.mdp.actions import JointPositionActionCfg
-from ...managers import (
+from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnvCfg
+from luckylab.envs.mdp.actions import JointPositionActionCfg
+from luckylab.managers.manager_term_config import (
     ActionTermCfg,
     CommandTermCfg,
     CurriculumTermCfg,
     ObservationGroupCfg,
     ObservationTermCfg,
     RewardTermCfg,
-    SceneEntityCfg,
     TerminationTermCfg,
 )
-from ...utils.noise import UniformNoiseCfg as Unoise
-from . import mdp
-from .mdp import UniformVelocityCommandCfg
+from luckylab.managers.scene_entity_config import SceneEntityCfg
+from luckylab.utils.noise import UniformNoiseCfg as Unoise
+from luckylab.tasks.velocity import mdp
+from luckylab.tasks.velocity.mdp import UniformVelocityCommandCfg
 
 
 def create_velocity_env_cfg(
@@ -68,7 +64,7 @@ def create_velocity_env_cfg(
             resampling_time_range=(3.0, 8.0),
             rel_standing_envs=0.1,
             rel_heading_envs=0.3,
-            heading_command=True,
+            heading_command=False,  # Disabled - requires base_quat from engine for heading_w
             heading_control_stiffness=0.5,
             ranges=UniformVelocityCommandCfg.Ranges(
                 lin_vel_x=(-1.0, 1.0),
@@ -97,7 +93,7 @@ def create_velocity_env_cfg(
             noise=Unoise(n_min=-0.01, n_max=0.01),
         ),
         "joint_vel": ObservationTermCfg(
-            func=mdp.joint_vel,
+            func=mdp.joint_vel_rel,
             noise=Unoise(n_min=-1.5, n_max=1.5),
         ),
         "actions": ObservationTermCfg(func=mdp.last_action),
@@ -109,10 +105,18 @@ def create_velocity_env_cfg(
 
     critic_terms: dict[str, ObservationTermCfg] = {
         **policy_terms,
-        "foot_height": ObservationTermCfg(func=mdp.foot_height),
-        "foot_air_time": ObservationTermCfg(func=mdp.foot_air_time),
-        "foot_contact": ObservationTermCfg(func=mdp.foot_contact),
-        "foot_contact_forces": ObservationTermCfg(func=mdp.foot_contact_forces),
+        "foot_height": ObservationTermCfg(
+            func=mdp.foot_height
+        ),
+        "foot_air_time": ObservationTermCfg(
+            func=mdp.foot_air_time
+        ),
+        "foot_contact": ObservationTermCfg(
+            func=mdp.foot_contact
+        ),
+        "foot_contact_forces": ObservationTermCfg(
+            func=mdp.foot_contact_forces
+        ),
     }
 
     observations: dict[str, ObservationGroupCfg] = {
@@ -132,12 +136,12 @@ def create_velocity_env_cfg(
         "track_linear_velocity": RewardTermCfg(
             func=mdp.track_linear_velocity,
             weight=2.0,
-            params={"std": math.sqrt(0.25), "command_name": "twist"},
+            params={"command_name": "twist", "std": math.sqrt(0.25)},
         ),
         "track_angular_velocity": RewardTermCfg(
             func=mdp.track_angular_velocity,
             weight=2.0,
-            params={"std": math.sqrt(0.5), "command_name": "twist"},
+            params={"command_name": "twist", "std": math.sqrt(0.5)},
         ),
         "upright": RewardTermCfg(
             func=mdp.flat_orientation,
@@ -152,15 +156,15 @@ def create_velocity_env_cfg(
             weight=1.0,
             params={
                 "asset_cfg": SceneEntityCfg("robot", joint_names=(".*",)),
+                "command_name": "twist",
                 "std_standing": posture_std_standing,
                 "std_walking": posture_std_walking,
                 "std_running": posture_std_running,
-                "command_name": "twist",
-                "walking_threshold": 0.05,  # mjlab uses 0.05
+                "walking_threshold": 0.05,
                 "running_threshold": 1.5,
             },
         ),
-        "dof_pos_limits": RewardTermCfg(func=mdp.joint_pos_limits, weight=-1.0),
+        "is_alive": RewardTermCfg(func=mdp.is_alive, weight=0.5),
         "body_ang_vel": RewardTermCfg(
             func=mdp.body_angular_velocity_penalty,
             weight=body_ang_vel_weight,

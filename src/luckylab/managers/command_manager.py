@@ -31,6 +31,16 @@ class CommandTerm(ManagerTermBase):
     @abc.abstractmethod
     def command(self):
         raise NotImplementedError
+    
+    def reset(self, env_ids: torch.Tensor | slice | None) -> dict[str, float]:
+        assert isinstance(env_ids, torch.Tensor)
+        extras = {}
+        for metric_name, metric_value in self.metrics.items():
+            extras[metric_name] = torch.mean(metric_value[env_ids]).item()
+            metric_value[env_ids] = 0.0
+        self.command_counter[env_ids] = 0
+        self._resample(env_ids)
+        return extras
 
     def compute(self, dt: float) -> None:
         self._update_metrics()
@@ -45,8 +55,8 @@ class CommandTerm(ManagerTermBase):
             self.time_left[env_ids] = self.time_left[env_ids].uniform_(
                 *self.cfg.resampling_time_range
             )
-        self._resample_command(env_ids)
-        self.command_counter[env_ids] += 1
+            self._resample_command(env_ids)
+            self.command_counter[env_ids] += 1
 
     @abc.abstractmethod
     def _update_metrics(self) -> None:

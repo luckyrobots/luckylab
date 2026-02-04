@@ -1,8 +1,3 @@
-"""Curriculum functions for velocity task.
-
-Matches mjlab's curriculum pattern for terrain and velocity progression.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -11,8 +6,8 @@ from typing import TYPE_CHECKING, TypedDict
 import torch
 
 if TYPE_CHECKING:
-    from ....envs.manager_based_rl_env import ManagerBasedRlEnv
-    from .velocity_command import UniformVelocityCommandCfg
+    from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
+    from luckylab.tasks.velocity.mdp.velocity_command import UniformVelocityCommandCfg
 
 logger = logging.getLogger(__name__)
 

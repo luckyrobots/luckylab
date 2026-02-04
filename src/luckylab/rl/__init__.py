@@ -4,7 +4,7 @@ from luckylab.rl.config import PpoAlgorithmCfg as PpoAlgorithmCfg
 from luckylab.rl.config import RlRunnerCfg as RlRunnerCfg
 from luckylab.rl.config import SacAlgorithmCfg as SacAlgorithmCfg
 from luckylab.rl.config import Td3AlgorithmCfg as Td3AlgorithmCfg
+from luckylab.rl.trainer import create_agent as create_agent
 from luckylab.rl.trainer import load_agent as load_agent
 from luckylab.rl.trainer import train as train
-from luckylab.rl.vecenv_wrapper import SkrlWrapper as SkrlWrapper
-from luckylab.rl.vecenv_wrapper import wrap_env as wrap_env
+from luckylab.rl.skrl_wrapper import SkrlWrapper as SkrlWrapper

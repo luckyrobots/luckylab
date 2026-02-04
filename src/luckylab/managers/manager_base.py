@@ -10,7 +10,7 @@ import torch
 from luckylab.managers.scene_entity_config import SceneEntityCfg
 
 if TYPE_CHECKING:
-    from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
+    from luckylab.envs import ManagerBasedRlEnv
     from luckylab.managers.manager_term_config import ManagerTermBaseCfg
 
 

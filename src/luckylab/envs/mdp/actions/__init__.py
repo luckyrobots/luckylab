@@ -8,11 +8,8 @@ from luckylab.envs.mdp.actions.actions_config import (
 from luckylab.envs.mdp.actions.actions_config import (
     JointVelocityActionCfg as JointVelocityActionCfg,
 )
-
 from luckylab.envs.mdp.actions.joint_actions import JointAction as JointAction
-from luckylab.envs.mdp.actions.joint_actions import (
-    JointEffortAction as JointEffortAction,
-)
+from luckylab.envs.mdp.actions.joint_actions import JointEffortAction as JointEffortAction
 from luckylab.envs.mdp.actions.joint_actions import (
     JointPositionAction as JointPositionAction,
 )

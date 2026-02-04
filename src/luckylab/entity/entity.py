@@ -112,19 +112,29 @@ class Entity:
         self._data = EntityData(
             num_envs=num_envs,
             device=device,
+            num_joints=num_joints,
             joint_names=joint_names,
         )
-        self._data.set_num_joints(num_joints, joint_names)
 
     @property
     def data(self) -> EntityData:
         """Entity data container."""
         return self._data
+    
+    @property
+    def actuators(self) -> list[ActuatorInfo]:
+        """List of actuator info objects."""
+        return self._actuators
 
     @property
     def joint_names(self) -> tuple[str, ...]:
         """Joint names."""
         return self._joint_names
+    
+    @property
+    def actuator_names(self) -> tuple[str, ...]:
+        """Actuator names."""
+        return self._actuator_names
 
     @property
     def num_joints(self) -> int:
@@ -132,19 +142,9 @@ class Entity:
         return self._num_joints
 
     @property
-    def actuator_names(self) -> tuple[str, ...]:
-        """Actuator names."""
-        return self._actuator_names
-
-    @property
     def num_actuators(self) -> int:
         """Number of actuators."""
         return len(self._actuators)
-
-    @property
-    def actuators(self) -> list[ActuatorInfo]:
-        """List of actuator info objects."""
-        return self._actuators
 
     def find_joints(
         self,
@@ -171,7 +171,7 @@ class Entity:
         # Use resolve_matching_names_values with dummy values
         data = {key: 0 for key in name_keys}
         try:
-            indices, names, _ = resolve_matching_names_values(data, list(joint_subset))
+            indices, names, _ = resolve_matching_names_values(data, list(joint_subset), preserve_order)
             return indices, names
         except ValueError:
             return [], []
@@ -200,7 +200,7 @@ class Entity:
 
         data = {key: 0 for key in name_keys}
         try:
-            indices, names, _ = resolve_matching_names_values(data, list(actuator_subset))
+            indices, names, _ = resolve_matching_names_values(data, list(actuator_subset), preserve_order)
             return indices, names
         except ValueError:
             return [], []

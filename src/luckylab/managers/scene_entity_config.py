@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..entity import Entity, Scene
+    from luckylab.entity import Entity
+    from luckylab.scene import Scene
 
 
 @dataclass

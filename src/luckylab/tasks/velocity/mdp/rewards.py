@@ -1,38 +1,19 @@
-"""Reward functions for velocity locomotion tasks.
-
-Task-specific rewards for velocity tracking. Re-exports general rewards
-from envs.mdp.rewards for convenience.
-
-Matches mjlab/tasks/velocity/mdp/rewards.py structure.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import torch
 
-from luckylab.envs.mdp.rewards import action_rate_l2 as action_rate_l2
-from luckylab.envs.mdp.rewards import flat_orientation_l2 as flat_orientation_l2
-from luckylab.envs.mdp.rewards import is_alive as is_alive
-from luckylab.envs.mdp.rewards import is_terminated as is_terminated
-from luckylab.envs.mdp.rewards import joint_pos_limits as joint_pos_limits
-from luckylab.envs.mdp.rewards import posture as posture
+from luckylab.entity import Entity
 from luckylab.managers.manager_term_config import RewardTermCfg
 from luckylab.managers.scene_entity_config import SceneEntityCfg
 from luckylab.utils.string import resolve_matching_names_values
 
 if TYPE_CHECKING:
-    from luckylab.entity import Entity
     from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
-
-
-##
-# Velocity tracking rewards.
-##
 
 
 def track_linear_velocity(
@@ -75,11 +56,6 @@ def track_angular_velocity(
     return torch.exp(-ang_vel_error / std**2)
 
 
-##
-# Orientation rewards.
-##
-
-
 def flat_orientation(
     env: ManagerBasedRlEnv,
     std: float,
@@ -106,9 +82,7 @@ def flat_orientation(
     return torch.exp(-xy_squared / std**2)
 
 
-##
-# Body velocity penalties.
-##
+# TODO: Missing self_collision_cost
 
 
 def body_angular_velocity_penalty(
@@ -128,9 +102,7 @@ def body_angular_velocity_penalty(
     return torch.sum(torch.square(ang_vel_xy), dim=1)
 
 
-##
-# Foot-based rewards.
-##
+# TODO: Missing angular_momentum_penalty
 
 
 def feet_air_time(
@@ -184,24 +156,36 @@ def feet_air_time(
     return reward
 
 
-##
-# Posture rewards.
-##
+# TODO: Missing feet_clearance
+
+
+# TODO: Missing feet_swing_height
+
+
+# TODO: Missing feet_slip
+
+
+# TODO: Missing soft_landing  
 
 
 class variable_posture:
     """Penalize deviation from default pose, with tighter constraints when standing."""
 
     def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
-        asset_cfg = cfg.params.get("asset_cfg", _DEFAULT_ASSET_CFG)
-        asset: Entity = env.scene[asset_cfg.name]
+        asset = cfg.params.get("asset_cfg".name)
+        default_joint_pos = asset.data.default_joint_pos
+        assert default_joint_pos is not None
+        self.default_joint_pos = default_joint_pos
+
         joint_names = asset.data.joint_names
 
         _, _, std_standing = resolve_matching_names_values(
             data=cfg.params["std_standing"],
             list_of_strings=joint_names,
         )
-        self.std_standing = torch.tensor(std_standing, device=env.device, dtype=torch.float32)
+        self.std_standing = torch.tensor(
+            std_standing, device=env.device, dtype=torch.float32
+        )
 
         _, _, std_walking = resolve_matching_names_values(
             data=cfg.params["std_walking"],
@@ -226,7 +210,7 @@ class variable_posture:
         running_threshold: float = 1.5,
         asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     ) -> torch.Tensor:
-        del std_standing, std_walking, std_running  # Unused - resolved in __init__.
+        del std_standing, std_walking, std_running  # Unused
 
         asset: Entity = env.scene[asset_cfg.name]
         command = env.command_manager.get_command(command_name)
@@ -237,7 +221,9 @@ class variable_posture:
         total_speed = linear_speed + angular_speed
 
         standing_mask = (total_speed < walking_threshold).float()
-        walking_mask = ((total_speed >= walking_threshold) & (total_speed < running_threshold)).float()
+        walking_mask = (
+            (total_speed >= walking_threshold) & (total_speed < running_threshold)
+        ).float()
         running_mask = (total_speed >= running_threshold).float()
 
         std = (
@@ -246,8 +232,8 @@ class variable_posture:
             + self.std_running * running_mask.unsqueeze(1)
         )
 
-        joint_pos = asset.data.joint_pos
-        default_joint_pos = asset.data.default_joint_pos
-        error_squared = torch.square(joint_pos - default_joint_pos)
+        current_joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
+        desired_joint_pos = self.default_joint_pos[:, asset_cfg.joint_ids]
+        error_squared = torch.square(current_joint_pos - desired_joint_pos)
 
         return torch.exp(-torch.mean(error_squared / (std**2), dim=1))

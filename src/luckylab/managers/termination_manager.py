@@ -11,7 +11,7 @@ from luckylab.managers.manager_base import ManagerBase
 from luckylab.managers.manager_term_config import TerminationTermCfg
 
 if TYPE_CHECKING:
-  from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
+    from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
 
 class TerminationManager(ManagerBase):
@@ -20,7 +20,7 @@ class TerminationManager(ManagerBase):
     def __init__(self, cfg: dict[str, TerminationTermCfg], env: ManagerBasedRlEnv) -> None:
         self._term_names: list[str] = []
         self._term_cfgs: list[TerminationTermCfg] = []
-        self._term_instances: dict[str, object] = {}
+        self._class_term_cfgs: list[TerminationTermCfg] = []
 
         self.cfg = cfg
         super().__init__(env=env)
@@ -43,7 +43,7 @@ class TerminationManager(ManagerBase):
         table.align["Name"] = "l"
         for index, (name, term_cfg) in enumerate(
             zip(self._term_names, self._term_cfgs, strict=False)
-            ):
+        ):
             table.add_row([index, name, term_cfg.time_out])
         msg += table.get_string()
         msg += "\n"
