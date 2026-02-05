@@ -29,14 +29,16 @@ class ObservationManager(ManagerBase):
                         dim = self._group_obs_concatenate_dim[group_name] - 1
                     else:
                         dim = self._group_obs_concatenate_dim[group_name]
-                dim_sum = torch.sum(term_dims[:, dim], dim=0)
-                term_dims[0, dim] = dim_sum
-                term_dims = term_dims[0]
+                    dim_sum = torch.sum(term_dims[:, dim], dim=0)
+                    term_dims[0, dim] = dim_sum
+                    term_dims = term_dims[0]
+                else:
+                    # 1D case (scalar observations): just sum
+                    term_dims = torch.sum(term_dims, dim=0, keepdim=True)
+                self._group_obs_dim[group_name] = tuple(term_dims.tolist())
             else:
-                term_dims = torch.sum(term_dims, dim=0)
-            self._group_obs_dim[group_name] = tuple(term_dims.tolist())
-        else:
-            self._group_obs_dim[group_name] = group_term_dims
+                # Non-concatenated: keep list of individual term dimensions
+                self._group_obs_dim[group_name] = group_term_dims
 
         self._obs_buffer: dict[str, torch.Tensor | dict[str, torch.Tensor]] | None = None
 

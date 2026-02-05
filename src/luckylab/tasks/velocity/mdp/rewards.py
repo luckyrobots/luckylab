@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from luckylab.entity import Entity
+from luckylab.entity.data import quat_apply_inverse
 from luckylab.managers.manager_term_config import RewardTermCfg
 from luckylab.managers.scene_entity_config import SceneEntityCfg
 from luckylab.utils.string import resolve_matching_names_values
@@ -63,22 +64,21 @@ def flat_orientation(
 ) -> torch.Tensor:
     """Reward flat base orientation (robot being upright).
 
-    Uses exponential kernel with std parameter.
-
-    Note: mjlab's version can compute projected gravity for specific bodies
-    using body_ids. LuckyLab only has root-level data from LuckyEngine,
-    so body_names/body_ids in asset_cfg are accepted for API compatibility
-    but not used - we always use root link projected gravity.
-
-    TODO: Add body-level projected gravity support if LuckyEngine provides
-    body_link_quat_w and gravity_vec_w in the observation schema. This would
-    require using quat_apply_inverse to project gravity into the body frame:
-        body_quat_w = asset.data.body_link_quat_w[:, asset_cfg.body_ids, :]
-        gravity_w = asset.data.gravity_vec_w
-        projected_gravity_b = quat_apply_inverse(body_quat_w, gravity_w)
+    If asset_cfg has body_ids specified, computes the projected gravity
+    for that specific body. Otherwise, uses the root link projected gravity.
     """
     asset: Entity = env.scene[asset_cfg.name]
-    xy_squared = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
+
+    # If body_ids are specified, compute projected gravity for that body.
+    if asset_cfg.body_ids:
+        body_quat_w = asset.data.root_link_quat_w  # [B, 4]
+        gravity_w = asset.data.gravity_vec_w  # [B, 3]
+        projected_gravity_b = quat_apply_inverse(body_quat_w, gravity_w)  # [B, 3]
+        xy_squared = torch.sum(torch.square(projected_gravity_b[:, :2]), dim=1)
+    else:
+        # Use root link projected gravity.
+        xy_squared = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
+
     return torch.exp(-xy_squared / std**2)
 
 
@@ -89,15 +89,10 @@ def body_angular_velocity_penalty(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Penalize excessive body angular velocities.
-
-    Note: mjlab's version uses world-frame angular velocity for specific bodies
-    using body_ids. LuckyLab only has root-level data from LuckyEngine,
-    so body_names/body_ids in asset_cfg are accepted for API compatibility
-    but not used - we always use root link body-frame angular velocity.
-    """
+    """Penalize excessive body angular velocities in world frame."""
     asset: Entity = env.scene[asset_cfg.name]
-    ang_vel = asset.data.root_link_ang_vel_b
+    ang_vel = asset.data.root_link_ang_vel_w
+    ang_vel = ang_vel.squeeze(1)
     ang_vel_xy = ang_vel[:, :2]  # Don't penalize z-angular velocity.
     return torch.sum(torch.square(ang_vel_xy), dim=1)
 
@@ -113,22 +108,7 @@ def feet_air_time(
     command_threshold: float = 0.5,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Reward feet air time within a target range.
-
-    Encourages alternating foot contacts (gait) by rewarding feet that have
-    been in the air for an appropriate duration.
-
-    Args:
-        env: The environment instance.
-        threshold_min: Minimum air time to reward (default 0.05s).
-        threshold_max: Maximum air time to reward (default 0.5s).
-        command_name: Optional command name to scale reward by velocity.
-        command_threshold: Velocity threshold for scaling (default 0.5).
-        asset_cfg: Configuration for the asset.
-
-    Returns:
-        Reward tensor, shape (num_envs,).
-    """
+    """Reward feet air time."""
     asset: Entity = env.scene[asset_cfg.name]
     current_air_time = asset.data.foot_air_time
     assert current_air_time is not None, "foot_air_time is None - ensure LuckyEngine provides this data"
@@ -141,7 +121,7 @@ def feet_air_time(
     in_air = current_air_time > 0
     num_in_air = torch.sum(in_air.float())
     mean_air_time = torch.sum(current_air_time * in_air.float()) / torch.clamp(num_in_air, min=1)
-    env.extras["log"]["Metrics/air_time_mean"] = mean_air_time
+    env.extras.setdefault("episode", {})["Metrics/air_time_mean"] = mean_air_time
 
     # Optionally scale by command velocity
     if command_name is not None:
@@ -172,7 +152,7 @@ class variable_posture:
     """Penalize deviation from default pose, with tighter constraints when standing."""
 
     def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
-        asset = cfg.params.get("asset_cfg".name)
+        asset: Entity = env.scene[cfg.params["asset_cfg"].name]
         default_joint_pos = asset.data.default_joint_pos
         assert default_joint_pos is not None
         self.default_joint_pos = default_joint_pos

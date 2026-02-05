@@ -64,7 +64,7 @@ def create_velocity_env_cfg(
             resampling_time_range=(3.0, 8.0),
             rel_standing_envs=0.1,
             rel_heading_envs=0.3,
-            heading_command=False,  # Disabled - requires base_quat from engine for heading_w
+            heading_command=True,
             heading_control_stiffness=0.5,
             ranges=UniformVelocityCommandCfg.Ranges(
                 lin_vel_x=(-1.0, 1.0),

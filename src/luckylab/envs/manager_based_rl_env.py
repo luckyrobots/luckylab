@@ -25,9 +25,11 @@ from luckylab.managers.manager_term_config import (
 from luckylab.managers.observation_manager import ObservationManager
 from luckylab.managers.reward_manager import RewardManager
 from luckylab.managers.termination_manager import TerminationManager
+from gymnasium.spaces import Box, Dict as DictSpace
+from gymnasium.vector.utils import batch_space
+
 from luckylab.utils import random as random_utils
 from luckylab.utils.logging import print_info
-from luckylab.utils.spaces import Box, Dict as DictSpace, batch_space
 
 
 @dataclass(kw_only=True)
@@ -72,6 +74,8 @@ class ManagerBasedRlEnvCfg:
     """Connection timeout in seconds."""
     skip_launch: bool = True
     """Skip launching engine (connect to existing)."""
+    simulation_mode: str = "fast"
+    """Simulation timing mode: 'fast' (training), 'realtime' (visualization), 'deterministic' (reproducibility)."""
 
     # MDP configs.
     rewards: dict[str, RewardTermCfg] = field(default_factory=dict)
@@ -326,6 +330,14 @@ class ManagerBasedRlEnv:
             self.luckyrobots.close(stop_engine=not self.cfg.skip_launch)
         print_info("Environment closed")
 
+    def set_simulation_mode(self, mode: str) -> None:
+        """Change simulation timing mode.
+
+        Args:
+            mode: 'fast' (training), 'realtime' (visualization), 'deterministic' (reproducibility)
+        """
+        self.luckyrobots.set_simulation_mode(mode)
+
     @staticmethod
     def seed(seed: int = -1) -> int:
         """Set the random seed.
@@ -357,7 +369,7 @@ class ManagerBasedRlEnv:
                 task=self.cfg.task,
                 timeout_s=self.cfg.timeout_s,
             )
-        self.luckyrobots.set_simulation_mode("fast")
+        self.luckyrobots.set_simulation_mode(self.cfg.simulation_mode)
 
     def _fetch_observation_schema(self) -> None:
         """Fetch observation schema from engine."""
@@ -418,7 +430,7 @@ class ManagerBasedRlEnv:
                 # Concatenated group: single Box with total dimension.
                 assert isinstance(group_dim, tuple), f"Expected tuple for concatenated group {group_name}"
                 self.single_observation_space.spaces[group_name] = Box(
-                    shape=group_dim, low=-math.inf, high=math.inf
+                    low=-np.inf, high=np.inf, shape=group_dim, dtype=np.float32
                 )
             else:
                 # Non-concatenated group: nested DictSpace with per-term boxes.
@@ -429,13 +441,15 @@ class ManagerBasedRlEnv:
                     group_term_names, group_dim, group_term_cfgs, strict=False
                 ):
                     group_space.spaces[term_name] = Box(
-                        shape=term_dim, low=-math.inf, high=math.inf
+                        low=-np.inf, high=np.inf, shape=term_dim, dtype=np.float32
                     )
                 self.single_observation_space.spaces[group_name] = group_space
 
         # Action space.
         action_dim = sum(self.action_manager.action_term_dim)
-        self.single_action_space = Box(shape=(action_dim,), low=-math.inf, high=math.inf)
+        self.single_action_space = Box(
+            low=-np.inf, high=np.inf, shape=(action_dim,), dtype=np.float32
+        )
 
         # Batched spaces.
         self.observation_space = batch_space(self.single_observation_space, self._num_envs)
@@ -449,35 +463,35 @@ class ManagerBasedRlEnv:
         Args:
             env_ids: Environment indices to reset.
         """
-        # Log episode length before reset.
-        if len(env_ids) > 0:
-            self.extras["log"]["Episode/length"] = torch.mean(
-                self.episode_length_buf[env_ids].float()
-            ).item()
-
         # Update curriculum.
         self.curriculum_manager.compute(env_ids)
 
         # NOTE: This is order sensitive.
-        self.extras["log"] = dict()
+        self.extras["episode"] = dict()
+
+        # Log episode length before reset.
+        if len(env_ids) > 0:
+            self.extras["episode"]["Episode/length"] = torch.mean(
+                self.episode_length_buf[env_ids].float()
+            ).item()
         # observation manager.
         info = self.observation_manager.reset(env_ids)
-        self.extras["log"].update(info)
+        self.extras["episode"].update(info)
         # action manager.
         info = self.action_manager.reset(env_ids)
-        self.extras["log"].update(info)
+        self.extras["episode"].update(info)
         # rewards manager.
         info = self.reward_manager.reset(env_ids)
-        self.extras["log"].update(info)
+        self.extras["episode"].update(info)
         # curriculum manager.
         info = self.curriculum_manager.reset(env_ids)
-        self.extras["log"].update(info)
+        self.extras["episode"].update(info)
         # command manager.
         info = self.command_manager.reset(env_ids)
-        self.extras["log"].update(info)
+        self.extras["episode"].update(info)
         # termination manager.
         info = self.termination_manager.reset(env_ids)
-        self.extras["log"].update(info)
+        self.extras["episode"].update(info)
         # reset the episode length buffer.
         self.episode_length_buf[env_ids] = 0
 

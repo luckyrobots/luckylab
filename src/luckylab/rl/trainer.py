@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from luckylab.rl.config import RlRunnerCfg
@@ -254,6 +255,26 @@ def create_agent(env, cfg: RlRunnerCfg, device: str):
     return creators[cfg.algorithm](env, cfg, device)
 
 
+def _print_model_info(env, cfg: RlRunnerCfg, device: str) -> None:
+    """Print model architecture info."""
+    print_info("-" * 80)
+    print_info("Resolved observation sets: ")
+    print_info(f"         policy :  ('policy',)")
+    if getattr(env, "num_critic_obs", 0) > 0:
+        print_info(f"         critic :  ('critic',)")
+    print_info("-" * 80)
+
+    # Print network architecture
+    obs_space, act_space = env.observation_space, env.action_space
+    num_policy_obs = getattr(env, "num_policy_obs", None)
+
+    actor = GaussianActor(obs_space, act_space, device, cfg.policy, num_policy_obs)
+    critic = Critic(obs_space, act_space, device, cfg.policy)
+
+    print_info(f"Actor MLP: {actor}")
+    print_info(f"Critic MLP: {critic}")
+
+
 def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu") -> None:
     """Train an RL agent using skrl."""
     from skrl.trainers.torch import SequentialTrainer
@@ -263,12 +284,19 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu
 
     seed_rng(rl_cfg.seed)
 
+    # Setup logging directory
+    log_dir = Path(rl_cfg.directory) / rl_cfg.experiment_name
+    log_dir.mkdir(parents=True, exist_ok=True)
+    print_info(f"[INFO] Logging experiment in directory: {log_dir}")
+
     print_info(f"Training {rl_cfg.algorithm.upper()} for {rl_cfg.max_iterations} iterations")
     if rl_cfg.wandb:
         print_info(f"Logging to wandb: {rl_cfg.wandb_project}")
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
     wrapped = SkrlWrapper(env, clip_actions=rl_cfg.clip_actions)
+
+    _print_model_info(wrapped, rl_cfg, device)
 
     agent = create_agent(wrapped, rl_cfg, device)
 
@@ -282,6 +310,7 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu
     trainer_cfg = {
         "timesteps": timesteps,
         "headless": True,
+        "environment_info": "episode"
     }
 
     trainer = SequentialTrainer(cfg=trainer_cfg, env=wrapped, agents=agent)

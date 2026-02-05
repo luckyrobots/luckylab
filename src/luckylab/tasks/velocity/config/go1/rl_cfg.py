@@ -41,8 +41,9 @@ UNITREE_GO1_PPO_RUNNER_CFG = RlRunnerCfg(
 UNITREE_GO1_SAC_RUNNER_CFG = RlRunnerCfg(
     algorithm="sac",
     seed=42,
-    max_iterations=50000,
+    max_iterations=100_000,
     memory_size=1_000_000,
+    # No clip_actions needed - policy uses tanh squashing
     policy=ActorCriticCfg(
         actor_hidden_dims=(256, 256, 256),
         critic_hidden_dims=(256, 256, 256),
@@ -50,16 +51,16 @@ UNITREE_GO1_SAC_RUNNER_CFG = RlRunnerCfg(
         init_noise_std=1.0,
     ),
     sac=SacAlgorithmCfg(
-        batch_size=256,
+        batch_size=512,  # Larger batch for more stable gradients
         discount_factor=0.99,
-        polyak=0.005, 
-        actor_learning_rate=1e-4,
-        critic_learning_rate=1e-4,  
-        learn_entropy=True,  
-        initial_entropy=1.0,  
-        target_entropy=-12.0,  
-        grad_norm_clip=1.0,  
-        random_timesteps=10000,  
+        polyak=0.005,
+        actor_learning_rate=1e-3,  # Higher LR for faster learning
+        critic_learning_rate=1e-3,
+        learn_entropy=True,
+        initial_entropy=1.0,
+        target_entropy=-4.0,  # More exploration (tanh correction makes entropy lower)
+        grad_norm_clip=1.0,
+        random_timesteps=1000,  # Start learning much sooner
         learning_starts=1000,
     ),
     experiment_name="go1_velocity_sac",

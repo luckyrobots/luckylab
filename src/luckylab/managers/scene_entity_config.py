@@ -59,6 +59,11 @@ class SceneEntityCfg:
             if indices:
                 self.joint_ids = indices
 
-        # Note: body_names/body_ids are kept for API compatibility but
-        # luckylab doesn't resolve them since we don't have body-level data
-        # from LuckyEngine. The root body data is always used.
+        # Resolve body names to IDs
+        # LuckyEngine only provides root-level data, so any body_names
+        # resolves to body_ids=[0] to trigger the quaternion-based code path.
+        if self.body_names is not None:
+            if isinstance(self.body_names, str):
+                self.body_names = (self.body_names,)
+            # All bodies resolve to root (0) since that's all we have
+            self.body_ids = [0]

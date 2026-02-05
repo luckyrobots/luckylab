@@ -53,6 +53,11 @@ class SkrlWrapper:
             low=-np.inf, high=np.inf, shape=(self.num_obs,), dtype=np.float32
         )
 
+        # Create action space with bounded [-1, 1] for normalized actions
+        self._action_space = Box(
+            low=-1.0, high=1.0, shape=(self.num_actions,), dtype=np.float32
+        )
+
     def _get_obs_dim(self, dim) -> int:
         """Extract observation dimension from various formats."""
         if isinstance(dim, tuple):
@@ -74,8 +79,8 @@ class SkrlWrapper:
 
     @property
     def action_space(self):
-        # skrl expects unbatched spaces
-        return self.env.single_action_space
+        # skrl expects gymnasium Box spaces
+        return self._action_space
 
     @classmethod
     def class_name(cls) -> str:
