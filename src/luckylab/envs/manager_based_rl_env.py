@@ -388,27 +388,17 @@ class ManagerBasedRlEnv:
         """Initialize scene with robot entity."""
         action_limits = robot_config["action_space"]["actuator_limits"]
         joint_names = [limit.get("name", f"joint_{i}") for i, limit in enumerate(action_limits)]
-
-        action_space = robot_config["action_space"]
-        if "actuator_names" in action_space:
-            actuator_names = list(action_space["actuator_names"])
-        else:
-            actuator_names = joint_names
-
+        
         self.scene = Scene()
         robot = Entity(
             cfg=EntityCfg(),
             num_envs=self._num_envs,
             num_joints=self._num_joints,
             joint_names=joint_names,
-            actuator_names=actuator_names,
+            actuator_configs=action_limits,
             device=self._device,
         )
         self.scene.add("robot", robot)
-
-        # Set default joint positions.
-        default_positions = [limit.get("default", 0.0) for limit in action_limits]
-        robot.data.set_default_joint_pos(default_positions)
 
         # Validate available observations.
         if self._observation_names:

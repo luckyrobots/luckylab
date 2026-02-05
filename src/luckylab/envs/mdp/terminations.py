@@ -18,7 +18,7 @@ _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 def time_out(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Terminate when the episode length exceeds its maximum."""
-    return env.episode_length_buf >= env.cfg.max_episode_length
+    return env.episode_length_buf >= env.max_episode_length
 
 
 def bad_orientation(

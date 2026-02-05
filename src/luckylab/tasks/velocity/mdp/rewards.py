@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING
 import torch
 
 from luckylab.entity import Entity
-from luckylab.entity.data import quat_apply_inverse
 from luckylab.managers.manager_term_config import RewardTermCfg
+from luckylab.utils.math import quat_apply_inverse
 from luckylab.managers.scene_entity_config import SceneEntityCfg
 from luckylab.utils.string import resolve_matching_names_values
 
@@ -92,7 +92,6 @@ def body_angular_velocity_penalty(
     """Penalize excessive body angular velocities in world frame."""
     asset: Entity = env.scene[asset_cfg.name]
     ang_vel = asset.data.root_link_ang_vel_w
-    ang_vel = ang_vel.squeeze(1)
     ang_vel_xy = ang_vel[:, :2]  # Don't penalize z-angular velocity.
     return torch.sum(torch.square(ang_vel_xy), dim=1)
 
@@ -112,18 +111,14 @@ def feet_air_time(
     asset: Entity = env.scene[asset_cfg.name]
     current_air_time = asset.data.foot_air_time
     assert current_air_time is not None, "foot_air_time is None - ensure LuckyEngine provides this data"
-
-    # Reward feet with air time in the target range
     in_range = (current_air_time > threshold_min) & (current_air_time < threshold_max)
     reward = torch.sum(in_range.float(), dim=1)
-
-    # Log mean air time for debugging
     in_air = current_air_time > 0
     num_in_air = torch.sum(in_air.float())
-    mean_air_time = torch.sum(current_air_time * in_air.float()) / torch.clamp(num_in_air, min=1)
+    mean_air_time = torch.sum(current_air_time * in_air.float()) / torch.clamp(
+        num_in_air, min=1
+    )
     env.extras.setdefault("episode", {})["Metrics/air_time_mean"] = mean_air_time
-
-    # Optionally scale by command velocity
     if command_name is not None:
         command = env.command_manager.get_command(command_name)
         if command is not None:
@@ -132,7 +127,6 @@ def feet_air_time(
             total_command = linear_norm + angular_norm
             scale = (total_command > command_threshold).float()
             reward *= scale
-
     return reward
 
 

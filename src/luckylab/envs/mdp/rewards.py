@@ -40,7 +40,23 @@ def action_rate_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   )
 
 
-# TODO: Missing joint_pos_limits penalty
+def joint_pos_limits(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Penalize joint positions if they cross the soft limits."""
+    asset: Entity = env.scene[asset_cfg.name]
+    soft_joint_pos_limits = asset.data.soft_joint_pos_limits
+    assert soft_joint_pos_limits is not None
+    out_of_limits = -(
+      asset.data.joint_pos[:, asset_cfg.joint_ids]
+      - soft_joint_pos_limits[:, asset_cfg.joint_ids, 0]
+    ).clip(max=0.0)
+    out_of_limits += (
+      asset.data.joint_pos[:, asset_cfg.joint_ids]
+      - soft_joint_pos_limits[:, asset_cfg.joint_ids, 1]
+    ).clip(min=0.0)
+    return torch.sum(out_of_limits, dim=1)
 
 
 class posture:

@@ -13,12 +13,16 @@ To enable: define both "policy" and "critic" observation groups in your env conf
 If only "policy" is defined, falls back to symmetric (same obs for both).
 """
 
+from __future__ import annotations
+
 import numpy as np
 import torch
 from gymnasium.spaces import Box
 
 from luckylab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from luckylab.envs.types import VecEnvObs
+from luckylab.utils.nan_guard import NanGuard, NanGuardCfg
+from luckylab.visualization import DebugVisualizer
 
 
 class SkrlWrapper:
@@ -28,9 +32,22 @@ class SkrlWrapper:
         self,
         env: ManagerBasedRlEnv,
         clip_actions: float | None = None,
+        nan_guard_cfg: NanGuardCfg | None = None,
     ):
         self.env = env
         self.clip_actions = clip_actions
+
+        if nan_guard_cfg is None and getattr(env.cfg, "enable_nan_guard", False):
+            nan_guard_cfg = NanGuardCfg(
+                enabled=True,
+                recovery_mode=True,
+                halt_on_nan=False,
+                verbose=True,
+            )
+        self.nan_guard = NanGuard(nan_guard_cfg)
+
+        # Debug visualization (auto-enabled in realtime mode)
+        self.visualizer = DebugVisualizer(env)
 
         self.num_envs = self.unwrapped.num_envs
         self.num_agents = 1  # Single agent environment
@@ -91,6 +108,11 @@ class SkrlWrapper:
         return self.env
 
     @property
+    def is_realtime(self) -> bool:
+        """Check if running in realtime mode."""
+        return getattr(self.cfg, "simulation_mode", "fast") == "realtime"
+
+    @property
     def episode_length_buf(self) -> torch.Tensor:
         return self.unwrapped.episode_length_buf
 
@@ -126,17 +148,45 @@ class SkrlWrapper:
     def step(
         self, actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+        # Check actions for NaN before processing
+        actions, action_nan = self.nan_guard.check_actions(actions, replace_value=0.0)
+
         if self.clip_actions is not None:
             actions = torch.clamp(actions, -self.clip_actions, self.clip_actions)
 
         obs_dict, rew, terminated, truncated, extras = self.env.step(actions)
+
+        # Check observations for NaN
+        obs = self._concat_obs(obs_dict)
+        obs, obs_nan = self.nan_guard.check_observations(obs, replace_value=0.0)
+
+        # Check reward for NaN
+        rew, rew_nan = self.nan_guard.check_reward(rew, replace_value=0.0)
+
+        # Increment step counter
+        self.nan_guard.step_counter += 1
+
+        # Track NaN occurrences
+        if action_nan or obs_nan or rew_nan:
+            extras["nan_detected"] = {
+                "action": action_nan,
+                "observation": obs_nan,
+                "reward": rew_nan,
+                "step": self.nan_guard.step_counter,
+            }
 
         dones = (terminated | truncated).to(dtype=torch.long)
 
         if not self.cfg.is_finite_horizon:
             extras["time_outs"] = truncated
 
-        return self._concat_obs(obs_dict), rew, terminated, dones, extras
+        # Auto-draw velocity command in realtime mode
+        if self.is_realtime:
+            self.visualizer.draw_velocity_command(env_idx=0)
+
+        return obs, rew, terminated, dones, extras
 
     def close(self) -> None:
+        if self.nan_guard.enabled:
+            print(self.nan_guard.get_stats_summary())
         self.env.close()

@@ -44,13 +44,15 @@ class GaussianActor(GaussianMixin, Model):
         device,
         cfg: ActorCriticCfg,
         num_policy_obs: int | None = None,
+        squash_output: bool = False,
     ):
         Model.__init__(self, obs_space, act_space, device)
         GaussianMixin.__init__(
-            self, clip_actions=False, clip_log_std=True, min_log_std=-20, max_log_std=2
+            self, clip_actions=True, clip_log_std=True, min_log_std=-20, max_log_std=2
         )
 
         self._num_policy_obs = num_policy_obs or obs_space.shape[0]
+        self._squash_output = squash_output
         self.net = build_mlp(
             self._num_policy_obs, act_space.shape[0], cfg.actor_hidden_dims, cfg.activation
         )
@@ -68,6 +70,10 @@ class GaussianActor(GaussianMixin, Model):
     def compute(self, inputs, role=""):
         obs = inputs["states"][:, :self._num_policy_obs]
         mean = self.net(obs)
+
+        if self._squash_output:
+            mean = torch.tanh(mean)
+
         if self._noise_std_type == "log":
             log_std = self.log_std.expand_as(mean)
         else:

@@ -21,6 +21,7 @@ class ActuatorInfo:
 
     In luckylab, actuators are defined by LuckyEngine. This class stores
     the mapping between actuator names and the joints they control.
+    Actual actuator data (limits, defaults, scales) is stored in EntityData.
     """
 
     name: str
@@ -57,7 +58,7 @@ class Entity:
         num_joints: int,
         joint_names: list[str],
         device: torch.device,
-        actuator_names: list[str] | None = None,
+        actuator_configs: list[dict] | None = None,
     ) -> None:
         """Initialize the entity.
 
@@ -67,8 +68,9 @@ class Entity:
             num_joints: Number of joints.
             joint_names: List of joint names.
             device: Torch device.
-            actuator_names: List of actuator names. If None, assumes actuator
-                names match joint names (1:1 mapping).
+            actuator_configs: List of actuator config dicts from robot config.
+                Each dict must have: name, default, lower, upper, scale.
+                If None, creates default actuators matching joint names.
         """
         self.cfg = cfg
         self._num_envs = num_envs
@@ -76,25 +78,40 @@ class Entity:
         self._joint_names = tuple(joint_names)
         self._device = device
 
-        # Initialize actuators
-        # Default: assume actuator names = joint names (common case)
-        if actuator_names is None:
-            actuator_names = joint_names
-
-        self._actuator_names = tuple(actuator_names)
         self._actuators: list[ActuatorInfo] = []
         self._actuator_to_joint: dict[str, str] = {}
 
-        # Build actuator info list
-        # For now, assume 1:1 mapping where actuator name = joint name
-        # This can be extended later if LuckyEngine supports different mappings
-        for i, act_name in enumerate(actuator_names):
+        # Build actuator info from configs
+        if actuator_configs is None:
+            # Default: create basic actuators matching joint names with default values
+            actuator_configs = [
+                {"name": name, "default": 0.0, "lower": -3.14, "upper": 3.14, "scale": 1.0}
+                for name in joint_names
+            ]
+
+        default_positions: list[float] = []
+        lower_limits: list[float] = []
+        upper_limits: list[float] = []
+        action_scales: list[float] = []
+
+        for i, config in enumerate(actuator_configs):
+            act_name = config.get("name", f"joint_{i}")
+
+            # Validate required fields
+            if "default" not in config:
+                raise ValueError(f"Missing 'default' position for joint '{act_name}' in robot config")
+            if "lower" not in config:
+                raise ValueError(f"Missing 'lower' limit for joint '{act_name}' in robot config")
+            if "upper" not in config:
+                raise ValueError(f"Missing 'upper' limit for joint '{act_name}' in robot config")
+            if "scale" not in config:
+                raise ValueError(f"Missing 'scale' for joint '{act_name}' in robot config")
+
             # Find corresponding joint (by name match or index)
             if act_name in joint_names:
                 joint_name = act_name
                 joint_id = joint_names.index(act_name)
             elif i < len(joint_names):
-                # Fall back to index-based mapping
                 joint_name = joint_names[i]
                 joint_id = i
             else:
@@ -104,9 +121,20 @@ class Entity:
                 )
 
             self._actuators.append(
-                ActuatorInfo(name=act_name, joint_name=joint_name, joint_id=joint_id)
+                ActuatorInfo(
+                    name=act_name,
+                    joint_name=joint_name,
+                    joint_id=joint_id,
+                )
             )
             self._actuator_to_joint[act_name] = joint_name
+
+            default_positions.append(config["default"])
+            lower_limits.append(config["lower"])
+            upper_limits.append(config["upper"])
+            action_scales.append(config["scale"])
+
+        self._actuator_names = tuple(a.name for a in self._actuators)
 
         # Initialize data container
         self._data = EntityData(
@@ -115,6 +143,11 @@ class Entity:
             num_joints=num_joints,
             joint_names=joint_names,
         )
+
+        # Set actuator data
+        self._data.set_default_joint_pos(default_positions)
+        self._data.set_joint_pos_limits(lower_limits, upper_limits)
+        self._data.set_action_scale(action_scales)
 
     @property
     def data(self) -> EntityData:

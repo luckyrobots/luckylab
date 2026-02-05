@@ -170,6 +170,7 @@ def create_velocity_env_cfg(
             weight=body_ang_vel_weight,
             params={"asset_cfg": SceneEntityCfg("robot", body_names=(trunk_body_name,))},
         ),
+        "dof_pos_limits": RewardTermCfg(func=mdp.joint_pos_limits, weight=-1.0),
         "action_rate_l2": RewardTermCfg(func=mdp.action_rate_l2, weight=-0.1),
     }
 

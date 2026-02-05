@@ -8,55 +8,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Callable
 
 import torch
 
+from luckylab.utils.math import quat_apply
+
 logger = logging.getLogger(__name__)
-
-# Type alias for setter functions
-SetterFunc = Callable[["EntityData", torch.Tensor], None]
-
-
-# =============================================================================
-# Quaternion utilities
-# =============================================================================
-
-
-def quat_apply(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
-    """Apply a quaternion rotation to a vector.
-
-    Args:
-        quat: The quaternion in (w, x, y, z). Shape is (..., 4).
-        vec: The vector in (x, y, z). Shape is (..., 3).
-
-    Returns:
-        The rotated vector in (x, y, z). Shape is (..., 3).
-    """
-    shape = vec.shape
-    quat = quat.reshape(-1, 4)
-    vec = vec.reshape(-1, 3)
-    xyz = quat[:, 1:]
-    t = xyz.cross(vec, dim=-1) * 2
-    return (vec + quat[:, 0:1] * t + xyz.cross(t, dim=-1)).view(shape)
-
-
-def quat_apply_inverse(quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
-    """Apply the inverse of a quaternion rotation to a vector.
-
-    Args:
-        quat: The quaternion in (w, x, y, z). Shape is (..., 4).
-        vec: The vector in (x, y, z). Shape is (..., 3).
-
-    Returns:
-        The rotated vector in (x, y, z). Shape is (..., 3).
-    """
-    shape = vec.shape
-    quat = quat.reshape(-1, 4)
-    vec = vec.reshape(-1, 3)
-    xyz = quat[:, 1:]
-    t = xyz.cross(vec, dim=-1) * 2
-    return (vec - quat[:, 0:1] * t + xyz.cross(t, dim=-1)).view(shape)
 
 
 @dataclass
@@ -184,6 +141,9 @@ class EntityData:
     _foot_height: torch.Tensor = field(init=False)
     _foot_contact_forces: torch.Tensor = field(init=False)
     _foot_air_time: torch.Tensor = field(init=False)
+    # Joint limits and action scales
+    _soft_joint_pos_limits: torch.Tensor = field(init=False)
+    _action_scale: torch.Tensor = field(init=False)
 
     def __post_init__(self):
         """Initialize data buffers."""
@@ -202,6 +162,10 @@ class EntityData:
         self._foot_height = torch.zeros(self.num_envs, 4, device=self.device)
         self._foot_contact_forces = torch.zeros(self.num_envs, 4, device=self.device)
         self._foot_air_time = torch.zeros(self.num_envs, 4, device=self.device)
+        # Joint limits: shape (num_envs, num_joints, 2) where [:, :, 0] is lower, [:, :, 1] is upper
+        self._soft_joint_pos_limits = torch.zeros(self.num_envs, self.num_joints, 2, device=self.device)
+        # Action scale per joint: shape (num_joints,)
+        self._action_scale = torch.ones(self.num_joints, device=self.device)
 
         # Constants
         self._gravity_vec_w = torch.tensor([[0.0, 0.0, -1.0]], device=self.device).expand(self.num_envs, -1)
@@ -275,6 +239,41 @@ class EntityData:
         """Default joint velocities. Shape (num_envs, num_joints)."""
         return self._default_joint_vel
 
+    @property
+    def soft_joint_pos_limits(self) -> torch.Tensor:
+        """Soft joint position limits. Shape (num_envs, num_joints, 2).
+
+        [:, :, 0] is lower limit, [:, :, 1] is upper limit.
+        """
+        return self._soft_joint_pos_limits
+
+    def set_joint_pos_limits(self, lower: list[float], upper: list[float]) -> None:
+        """Set soft joint position limits.
+
+        Args:
+            lower: Lower limits for each joint.
+            upper: Upper limits for each joint.
+        """
+        limits = torch.tensor(
+            [[lo, hi] for lo, hi in zip(lower, upper)],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        self._soft_joint_pos_limits = limits.unsqueeze(0).expand(self.num_envs, -1, -1).clone()
+
+    @property
+    def action_scale(self) -> torch.Tensor:
+        """Action scale per joint. Shape (num_joints,)."""
+        return self._action_scale
+
+    def set_action_scale(self, scales: list[float]) -> None:
+        """Set action scale per joint.
+
+        Args:
+            scales: Scale factor for each joint's action.
+        """
+        self._action_scale = torch.tensor(scales, device=self.device, dtype=torch.float32)
+
     # Privileged observations - singular names matching mjlab
 
     @property
@@ -297,7 +296,7 @@ class EntityData:
         """Time since last foot contact in seconds. Shape (num_envs, 4). Order: FR, FL, RR, RL."""
         return self._foot_air_time
 
-    # Derived properties (computed from base data, matching mjlab API)
+    # Derived properties
 
     @property
     def gravity_vec_w(self) -> torch.Tensor:

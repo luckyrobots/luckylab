@@ -14,11 +14,11 @@ if TYPE_CHECKING:
     from luckylab.envs import ManagerBasedRlEnvCfg
 
 
-def _get_experiment_cfg(cfg: RlRunnerCfg) -> dict:
+def _get_experiment_cfg(cfg: RlRunnerCfg, experiment_name: str | None = None) -> dict:
     """Build skrl experiment config for logging and checkpointing."""
     experiment_cfg = {
         "directory": cfg.directory,
-        "experiment_name": cfg.experiment_name,
+        "experiment_name": experiment_name or cfg.experiment_name,
         "write_interval": cfg.log_interval,
         "checkpoint_interval": cfg.checkpoint_interval,
         "wandb": cfg.wandb,
@@ -33,7 +33,7 @@ def _get_experiment_cfg(cfg: RlRunnerCfg) -> dict:
     return experiment_cfg
 
 
-def _create_ppo_agent(env, cfg: RlRunnerCfg, device: str):
+def _create_ppo_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None = None):
     """Create PPO agent with models and memory."""
     from skrl.agents.torch.ppo import PPO
     from skrl.memories.torch import RandomMemory
@@ -75,7 +75,7 @@ def _create_ppo_agent(env, cfg: RlRunnerCfg, device: str):
         agent_cfg["learning_rate_scheduler"] = KLAdaptiveLR
         agent_cfg["learning_rate_scheduler_kwargs"] = {"kl_threshold": ppo.desired_kl}
 
-    agent_cfg["experiment"] = _get_experiment_cfg(cfg)
+    agent_cfg["experiment"] = _get_experiment_cfg(cfg, experiment_name)
 
     for m in models.values():
         m.to(device)
@@ -90,7 +90,7 @@ def _create_ppo_agent(env, cfg: RlRunnerCfg, device: str):
     )
 
 
-def _create_sac_agent(env, cfg: RlRunnerCfg, device: str):
+def _create_sac_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None = None):
     """Create SAC agent with models and memory."""
     from skrl.agents.torch.sac import SAC
     from skrl.memories.torch import RandomMemory
@@ -99,8 +99,9 @@ def _create_sac_agent(env, cfg: RlRunnerCfg, device: str):
     num_policy_obs = getattr(env, "num_policy_obs", None)
     sac = cfg.sac
 
+    # SAC uses tanh squashing to bound actions to [-1, 1]
     models = {
-        "policy": GaussianActor(obs_space, act_space, device, cfg.policy, num_policy_obs),
+        "policy": GaussianActor(obs_space, act_space, device, cfg.policy, num_policy_obs, squash_output=True),
         "critic_1": QCritic(obs_space, act_space, device, cfg.policy),
         "critic_2": QCritic(obs_space, act_space, device, cfg.policy),
         "target_critic_1": QCritic(obs_space, act_space, device, cfg.policy),
@@ -130,7 +131,7 @@ def _create_sac_agent(env, cfg: RlRunnerCfg, device: str):
     if sac.target_entropy is not None:
         agent_cfg["target_entropy"] = sac.target_entropy
 
-    agent_cfg["experiment"] = _get_experiment_cfg(cfg)
+    agent_cfg["experiment"] = _get_experiment_cfg(cfg, experiment_name)
 
     for m in models.values():
         m.to(device)
@@ -145,7 +146,7 @@ def _create_sac_agent(env, cfg: RlRunnerCfg, device: str):
     )
 
 
-def _create_td3_agent(env, cfg: RlRunnerCfg, device: str):
+def _create_td3_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None = None):
     """Create TD3 agent with models and memory."""
     from skrl.agents.torch.td3 import TD3
     from skrl.memories.torch import RandomMemory
@@ -180,7 +181,7 @@ def _create_td3_agent(env, cfg: RlRunnerCfg, device: str):
         "smooth_regularization_clip": td3.smooth_regularization_clip,
     }
 
-    agent_cfg["experiment"] = _get_experiment_cfg(cfg)
+    agent_cfg["experiment"] = _get_experiment_cfg(cfg, experiment_name)
 
     for m in models.values():
         m.to(device)
@@ -195,7 +196,7 @@ def _create_td3_agent(env, cfg: RlRunnerCfg, device: str):
     )
 
 
-def _create_ddpg_agent(env, cfg: RlRunnerCfg, device: str):
+def _create_ddpg_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None = None):
     """Create DDPG agent with models and memory."""
     from skrl.agents.torch.ddpg import DDPG
     from skrl.memories.torch import RandomMemory
@@ -225,7 +226,7 @@ def _create_ddpg_agent(env, cfg: RlRunnerCfg, device: str):
         "critic_learning_rate": ddpg.critic_learning_rate,
     }
 
-    agent_cfg["experiment"] = _get_experiment_cfg(cfg)
+    agent_cfg["experiment"] = _get_experiment_cfg(cfg, experiment_name)
 
     for m in models.values():
         m.to(device)
@@ -240,7 +241,7 @@ def _create_ddpg_agent(env, cfg: RlRunnerCfg, device: str):
     )
 
 
-def create_agent(env, cfg: RlRunnerCfg, device: str):
+def create_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None = None):
     """Create agent based on algorithm selection."""
     creators = {
         "ppo": _create_ppo_agent,
@@ -252,7 +253,7 @@ def create_agent(env, cfg: RlRunnerCfg, device: str):
     if cfg.algorithm not in creators:
         raise ValueError(f"Unknown algorithm: {cfg.algorithm}")
 
-    return creators[cfg.algorithm](env, cfg, device)
+    return creators[cfg.algorithm](env, cfg, device, experiment_name)
 
 
 def _print_model_info(env, cfg: RlRunnerCfg, device: str) -> None:
@@ -284,8 +285,17 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu
 
     seed_rng(rl_cfg.seed)
 
+    # Generate experiment name: task_algorithm (e.g., go1_velocity_sac)
+    # Strip any existing algorithm suffix from the base name
+    base_name = rl_cfg.experiment_name
+    for alg in ["_ppo", "_sac", "_td3", "_ddpg"]:
+        if base_name.endswith(alg):
+            base_name = base_name[: -len(alg)]
+            break
+    experiment_name = f"{base_name}_{rl_cfg.algorithm}"
+
     # Setup logging directory
-    log_dir = Path(rl_cfg.directory) / rl_cfg.experiment_name
+    log_dir = Path(rl_cfg.directory) / experiment_name
     log_dir.mkdir(parents=True, exist_ok=True)
     print_info(f"[INFO] Logging experiment in directory: {log_dir}")
 
@@ -298,7 +308,7 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu
 
     _print_model_info(wrapped, rl_cfg, device)
 
-    agent = create_agent(wrapped, rl_cfg, device)
+    agent = create_agent(wrapped, rl_cfg, device, experiment_name)
 
     # Compute total timesteps based on algorithm
     if rl_cfg.algorithm == "ppo":

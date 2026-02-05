@@ -14,8 +14,7 @@ _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 
 def foot_height(
-    env: ManagerBasedRlEnv,
-    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
     """Foot heights above ground. Shape (num_envs, 4)."""
     asset: Entity = env.scene[asset_cfg.name]
