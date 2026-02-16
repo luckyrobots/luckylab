@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from luckylab.rl.config import RlRunnerCfg
 
 # ANSI color codes
 COLORS = {
@@ -198,3 +202,82 @@ def print_training_iteration(
     print_header(header)
     print(format_metrics_table(metrics, group_by_prefix=True))
     print()
+
+
+class WandbLogger:
+    """Context manager for wandb logging that hooks into skrl agents."""
+
+    def __init__(self, cfg: RlRunnerCfg, experiment_name: str):
+        self.cfg = cfg
+        self.experiment_name = experiment_name
+        self._agent = None
+        self._original_write = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.cfg.wandb
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        import wandb
+
+        kwargs = {"project": self.cfg.wandb_project, "name": self.experiment_name}
+        if self.cfg.wandb_entity:
+            kwargs["entity"] = self.cfg.wandb_entity
+        wandb.init(**kwargs)
+        print_info(f"Logging to wandb: {self.cfg.wandb_project}")
+        return self
+
+    def attach(self, agent, env=None):
+        """Hook into agent.write_tracking_data to push metrics to wandb.
+
+        Args:
+            agent: The skrl agent.
+            env: Optional SkrlWrapper to pull episode info from.
+        """
+        if not self.enabled:
+            return
+        import numpy as np
+        import wandb
+
+        self._agent = agent
+        self._env = env
+        self._original_write = agent.write_tracking_data
+
+        def _clean_key(k: str) -> str:
+            """Strip skrl's ' / ' group prefixes for cleaner wandb metric names."""
+            if " / " in k:
+                prefix, rest = k.split(" / ", 1)
+                return f"{prefix}/{rest}"
+            return k
+
+        def _write(timestep: int, timesteps: int) -> None:
+            metrics = {}
+            for k, v in agent.tracking_data.items():
+                clean = _clean_key(k)
+                if k.endswith("(min)"):
+                    metrics[clean] = np.min(v)
+                elif k.endswith("(max)"):
+                    metrics[clean] = np.max(v)
+                else:
+                    metrics[clean] = np.mean(v)
+            # Log cached episode info from the environment wrapper.
+            if env is not None and hasattr(env, "_last_episode_info"):
+                for k, v in env._last_episode_info.items():
+                    if isinstance(v, (int, float)):
+                        metrics[f"Info/{k}"] = v
+            if metrics:
+                wandb.log(metrics, step=timestep)
+            self._original_write(timestep, timesteps)
+
+        agent.write_tracking_data = _write
+
+    def __exit__(self, *exc):
+        if not self.enabled:
+            return
+        if self._agent and self._original_write:
+            self._agent.write_tracking_data = self._original_write
+        import wandb
+
+        wandb.finish()

@@ -5,18 +5,16 @@ from typing import Any
 from luckyrobots import LuckyRobots
 import numpy as np
 import torch
-from prettytable import PrettyTable
+
 
 from luckylab.envs import types
-from luckylab.configs.domain_randomization import PhysicsDRCfg
+from luckylab.configs.simulation_contract import SimulationContract
 from luckylab.entity import Entity, EntityCfg
 from luckylab.scene import Scene
 from luckylab.managers.action_manager import ActionManager
-from luckylab.managers.command_manager import CommandManager, NullCommandManager
 from luckylab.managers.curriculum_manager import CurriculumManager, NullCurriculumManager
 from luckylab.managers.manager_term_config import (
     ActionTermCfg,
-    CommandTermCfg,
     CurriculumTermCfg,
     ObservationGroupCfg,
     RewardTermCfg,
@@ -30,6 +28,7 @@ from gymnasium.vector.utils import batch_space
 
 from luckylab.utils import random as random_utils
 from luckylab.utils.logging import print_info
+from luckylab.utils.nan_guard import NanGuardCfg
 
 
 @dataclass(kw_only=True)
@@ -37,7 +36,7 @@ class ManagerBasedRlEnvCfg:
     """Configuration for a manager-based RL environment.
 
     Combines base environment settings with RL-specific configuration
-    (rewards, terminations, commands, curriculum).
+    (rewards, terminations, curriculum, simulation contract).
     """
     
     decimation: int
@@ -48,8 +47,6 @@ class ManagerBasedRlEnvCfg:
     """Action terms: name -> config."""
 
     # Environment settings.
-    seed: int | None = None
-    """Random seed (None = random)."""
     num_envs: int = 1
     """Number of parallel environments."""
     episode_length_s: float = 20.0
@@ -64,7 +61,7 @@ class ManagerBasedRlEnvCfg:
     """Scene name to load."""
     task: str = "locomotion"
     """Task name."""
-    robot: str = "unitreego1"
+    robot: str = "unitreego2"
     """Robot name."""
     host: str = "172.24.160.1"
     """gRPC host address."""
@@ -72,6 +69,8 @@ class ManagerBasedRlEnvCfg:
     """gRPC port."""
     timeout_s: float = 120.0
     """Connection timeout in seconds."""
+    step_timeout_s: float = 30.0
+    """Per-step physics timeout in seconds (default 30s; engine default is 5s)."""
     skip_launch: bool = True
     """Skip launching engine (connect to existing)."""
     simulation_mode: str = "fast"
@@ -82,14 +81,12 @@ class ManagerBasedRlEnvCfg:
     """Reward terms: name -> config."""
     terminations: dict[str, TerminationTermCfg] = field(default_factory=dict)
     """Termination terms: name -> config."""
-    commands: dict[str, CommandTermCfg] | None = None
-    """Command terms: name -> config."""
     curriculum: dict[str, CurriculumTermCfg] | None = None
     """Curriculum terms: name -> config."""
-    is_finite_horizon: bool = False
-    """Whether the task has a finite horizon."""
-    physics_dr: PhysicsDRCfg = field(default_factory=PhysicsDRCfg)
-    """Physics domain randomization config."""
+    simulation_contract: SimulationContract = field(default_factory=SimulationContract)
+    """Simulation contract sent to LuckyEngine on each reset (physics DR + command ranges)."""
+    nan_guard: NanGuardCfg = field(default_factory=NanGuardCfg)
+    """NaN guard configuration for detecting and recovering from NaN/Inf during training."""
 
 
 class ManagerBasedRlEnv:
@@ -104,7 +101,8 @@ class ManagerBasedRlEnv:
     def __init__(
             self, 
             cfg: ManagerBasedRlEnvCfg, 
-            device: str = "cpu"
+            device: str = "cpu",
+            **kwargs: Any
         ) -> None:
         """Initialize the environment.
 
@@ -117,25 +115,8 @@ class ManagerBasedRlEnv:
         self.cfg = cfg
         self._device = torch.device(device)
         self._num_envs = cfg.num_envs
-        if self.cfg.seed is not None:
-            self.cfg.seed = self.seed(self.cfg.seed)
         self.extras: dict[str, Any] = {}
         self.obs_buf: types.VecEnvObs = {}
-
-        # Print environment info.
-        print_info("")
-        table = PrettyTable()
-        table.title = "Base Environment"
-        table.field_names = ["Property", "Value"]
-        table.align["Property"] = "l"
-        table.align["Value"] = "l"
-        table.add_row(["Number of environments", self.num_envs])
-        table.add_row(["Environment device", self.device])
-        table.add_row(["Environment seed", self.cfg.seed])
-        table.add_row(["Physics step-size", self.physics_dt])
-        table.add_row(["Environment step-size", self.step_dt])
-        print_info(table.get_string())
-        print_info("")
 
         # Initialize RL-specific state.
         self.common_step_counter = 0
@@ -156,12 +137,10 @@ class ManagerBasedRlEnv:
         self._engine_obs_size: int = 0
         self._fetch_observation_schema()
 
-        # Initialize scene with robot entity.
         self._init_scene(robot_config)
-
         self._load_managers()
 
-        print_info(f"Environment initialized: {self._num_envs} envs, device={device}")
+        # Env ready (summary printed by trainer).
 
     # Properties.
 
@@ -169,6 +148,16 @@ class ManagerBasedRlEnv:
     def num_envs(self) -> int:
         """Number of parallel environments."""
         return self._num_envs
+    
+    @property
+    def physics_dt(self) -> float:
+        """Physics simulation step size."""
+        return self.cfg.sim_dt
+    
+    @property
+    def step_dt(self) -> float:
+        """Environment step size (physics_dt * decimation)."""
+        return self.physics_dt * self.cfg.decimation
 
     @property
     def device(self) -> torch.device:
@@ -186,16 +175,6 @@ class ManagerBasedRlEnv:
         return math.ceil(self.max_episode_length_s / self.step_dt)
 
     @property
-    def physics_dt(self) -> float:
-        """Physics simulation step size."""
-        return self.cfg.sim_dt
-
-    @property
-    def step_dt(self) -> float:
-        """Environment step size (physics_dt * decimation)."""
-        return self.physics_dt * self.cfg.decimation
-
-    @property
     def unwrapped(self) -> "ManagerBasedRlEnv":
         """Return the unwrapped environment."""
         return self
@@ -203,43 +182,26 @@ class ManagerBasedRlEnv:
     # Methods.
 
     def _load_managers(self) -> None:
-        """Load and initialize all managers.
-
-        Order is important! Event and command managers must be loaded first,
-        then action and observation managers, then other RL managers.
-        """
+        """Load and initialize all managers."""
         cfg = self.cfg
-
-        # Command manager (must be before observation manager since observations may reference commands).
-        if cfg.commands:
-            self.command_manager = CommandManager(cfg.commands, self)
-        else:
-            self.command_manager = NullCommandManager()
-        print_info(f"[INFO] {self.command_manager}")
 
         # Action and observation managers.
         self.action_manager = ActionManager(cfg.actions, self)
-        print_info(f"[INFO] {self.action_manager}")
         self.observation_manager = ObservationManager(cfg.observations, self)
-        print_info(f"[INFO] {self.observation_manager}")
 
         # Other RL-specific managers.
-
         self.termination_manager = TerminationManager(cfg.terminations, self)
-        print_info(f"[INFO] {self.termination_manager}")
         self.reward_manager = RewardManager(cfg.rewards, self)
-        print_info(f"[INFO] {self.reward_manager}")
-        # Curriculum manager.
         if cfg.curriculum:
             self.curriculum_manager = CurriculumManager(cfg.curriculum, self)
         else:
             self.curriculum_manager = NullCurriculumManager()
-        print_info(f"[INFO] {self.curriculum_manager}")
 
         self._configure_gym_env_spaces()
 
     def reset(
         self,
+        *,
         seed: int | None = None,
         env_ids: torch.Tensor | None = None,
         options: dict | None = None,
@@ -255,18 +217,12 @@ class ManagerBasedRlEnv:
             Tuple of (observations dict, extras).
         """
         del options
-
         if env_ids is None:
             env_ids = torch.arange(self._num_envs, dtype=torch.long, device=self._device)
-
         if seed is not None:
             self.seed(seed)
-
         self._reset_idx(env_ids)
-
-        # Compute all observation groups.
         self.obs_buf = self.observation_manager.compute(update_history=True)
-
         return self.obs_buf, self.extras
 
     def step(self, action: torch.Tensor) -> types.VecEnvStepReturn:
@@ -278,37 +234,40 @@ class ManagerBasedRlEnv:
         Returns:
             Tuple of (observations dict, reward, terminated, truncated, extras).
         """
+        # Clear stale episode info so it only exists on reset steps.
+        self.extras.pop("episode", None)
+
         if action.dim() == 1:
             action = action.unsqueeze(0)
 
-        # Process action through action manager (updates action history internally).
         self.action_manager.process_action(action)
-
-        # Update counters.
-        self.episode_length_buf += 1
-        self.common_step_counter += 1
-
-        # Check terminations.
-        self.reset_buf = self.termination_manager.compute()
-        self.reset_terminated = self.termination_manager.terminated
-        self.reset_time_outs = self.termination_manager.time_outs
-
-        self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
 
         # Get processed joint positions and step physics via gRPC.
         joint_positions = self.action_manager.processed_action
         joint_list = joint_positions[0].detach().cpu().tolist()
         observation = self.luckyrobots.step(actions=joint_list)
 
-        # Update entity data from observation.
+        # Update entity data from observation (must happen before termination/reward checks).
         if observation.observation:
-            obs_tensor = torch.tensor(
-                observation.observation, dtype=torch.float32, device=self._device
-            )
+            obs_np = np.asarray(observation.observation, dtype=np.float32)
+            obs_tensor = torch.from_numpy(obs_np).to(device=self._device)
             self.scene["robot"].data.update_from_observation(obs_tensor, self._observation_names)
 
-        # Update commands.
-        self.command_manager.compute(dt=self.step_dt)
+        # Update env counters.
+        self.episode_length_buf += 1
+        self.common_step_counter += 1
+
+        # Check terminations (now uses fresh data from the physics step above).
+        self.reset_buf = self.termination_manager.compute()
+        self.reset_terminated = self.termination_manager.terminated
+        self.reset_time_outs = self.termination_manager.time_outs
+
+        self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
+
+        # Reset terminated envs so observations reflect the new episode's initial state.
+        reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        if len(reset_env_ids) > 0:
+            self._reset_idx(reset_env_ids)
 
         self.obs_buf = self.observation_manager.compute(update_history=True)
 
@@ -339,20 +298,13 @@ class ManagerBasedRlEnv:
         self.luckyrobots.set_simulation_mode(mode)
 
     @staticmethod
-    def seed(seed: int = -1) -> int:
+    def seed(seed: int) -> None:
         """Set the random seed.
 
         Args:
-            seed: Seed value (-1 = random)
-
-        Returns:
-            The actual seed used
+            seed: Seed value.
         """
-        if seed == -1:
-            seed = np.random.randint(0, 10_000)
-        print_info(f"Setting seed: {seed}")
         random_utils.seed_rng(seed)
-        return seed
 
     # Private methods.
 
@@ -370,6 +322,9 @@ class ManagerBasedRlEnv:
                 timeout_s=self.cfg.timeout_s,
             )
         self.luckyrobots.set_simulation_mode(self.cfg.simulation_mode)
+        # Override the default 5s per-RPC timeout on the underlying gRPC client.
+        if self.luckyrobots.engine_client is not None:
+            self.luckyrobots.engine_client.timeout = self.cfg.step_timeout_s
 
     def _fetch_observation_schema(self) -> None:
         """Fetch observation schema from engine."""
@@ -382,7 +337,6 @@ class ManagerBasedRlEnv:
 
         self._observation_names = list(schema_resp.schema.observation_names)
         self._engine_obs_size = schema_resp.schema.observation_size
-        print_info(f"Observation schema: {len(self._observation_names)} fields, size={self._engine_obs_size}")
 
     def _init_scene(self, robot_config: dict) -> None:
         """Initialize scene with robot entity."""
@@ -420,7 +374,7 @@ class ManagerBasedRlEnv:
                 # Concatenated group: single Box with total dimension.
                 assert isinstance(group_dim, tuple), f"Expected tuple for concatenated group {group_name}"
                 self.single_observation_space.spaces[group_name] = Box(
-                    low=-np.inf, high=np.inf, shape=group_dim, dtype=np.float32
+                    low=-np.inf, high=np.inf, shape=group_dim
                 )
             else:
                 # Non-concatenated group: nested DictSpace with per-term boxes.
@@ -431,39 +385,41 @@ class ManagerBasedRlEnv:
                     group_term_names, group_dim, group_term_cfgs, strict=False
                 ):
                     group_space.spaces[term_name] = Box(
-                        low=-np.inf, high=np.inf, shape=term_dim, dtype=np.float32
+                        low=-np.inf, high=np.inf, shape=term_dim
                     )
                 self.single_observation_space.spaces[group_name] = group_space
 
         # Action space.
         action_dim = sum(self.action_manager.action_term_dim)
         self.single_action_space = Box(
-            low=-np.inf, high=np.inf, shape=(action_dim,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(action_dim,)
         )
 
         # Batched spaces.
         self.observation_space = batch_space(self.single_observation_space, self._num_envs)
         self.action_space = batch_space(self.single_action_space, self._num_envs)
 
-        print_info(f"Spaces: obs_groups={list(self.single_observation_space.spaces.keys())}, action={action_dim}")
+        # Spaces configured (printed by trainer's consolidated summary).
 
-    def _reset_idx(self, env_ids: torch.Tensor) -> None:
-        """Reset specific environments.
-
-        Args:
-            env_ids: Environment indices to reset.
-        """
-        # Update curriculum.
+    def _reset_idx(self, env_ids: torch.Tensor | None = None) -> None:
+        # Update curriculum before reset — updates SimulationContract ranges.
         self.curriculum_manager.compute(env_ids)
 
-        # NOTE: This is order sensitive.
-        self.extras["episode"] = dict()
+        # Reset physics via gRPC with updated contract (includes command ranges).
+        # vel_command is populated from the observation vector after reset.
+        observation = self.luckyrobots.reset(randomization_cfg=self.cfg.simulation_contract)
+        if observation.observation:
+            obs_np = np.asarray(observation.observation, dtype=np.float32)
+            obs_tensor = torch.from_numpy(obs_np).to(device=self._device)
+            self.scene["robot"].data.update_from_observation(obs_tensor, self._observation_names)
 
-        # Log episode length before reset.
+        # NOTE: This is order sensitive. Managers must reset after entity data is updated.
+        self.extras["episode"] = dict()
         if len(env_ids) > 0:
             self.extras["episode"]["Episode/length"] = torch.mean(
                 self.episode_length_buf[env_ids].float()
             ).item()
+
         # observation manager.
         info = self.observation_manager.reset(env_ids)
         self.extras["episode"].update(info)
@@ -476,21 +432,8 @@ class ManagerBasedRlEnv:
         # curriculum manager.
         info = self.curriculum_manager.reset(env_ids)
         self.extras["episode"].update(info)
-        # command manager.
-        info = self.command_manager.reset(env_ids)
-        self.extras["episode"].update(info)
         # termination manager.
         info = self.termination_manager.reset(env_ids)
         self.extras["episode"].update(info)
         # reset the episode length buffer.
         self.episode_length_buf[env_ids] = 0
-
-        # Reset physics via gRPC.
-        observation = self.luckyrobots.reset(randomization_cfg=self.cfg.physics_dr)
-
-        # Update entity data.
-        if observation.observation:
-            obs_tensor = torch.tensor(
-                observation.observation, dtype=torch.float32, device=self._device
-            )
-            self.scene["robot"].data.update_from_observation(obs_tensor, self._observation_names)

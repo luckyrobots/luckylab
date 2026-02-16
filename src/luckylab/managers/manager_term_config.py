@@ -6,7 +6,6 @@ from typing import Any, Callable, ParamSpec, TypeVar
 import torch
 
 from luckylab.managers.action_manager import ActionTerm
-from luckylab.managers.command_manager import CommandTerm
 from luckylab.utils.noise.noise_cfg import NoiseCfg, NoiseModelCfg
 
 P = ParamSpec("P")
@@ -38,20 +37,6 @@ class ActionTermCfg:
 
 
 ##
-# Command manager.
-##
-
-
-@dataclass(kw_only=True)
-class CommandTermCfg:
-    """Configuration for a command generator term."""
-
-    class_type: type[CommandTerm]
-    resampling_time_range: tuple[float, float]
-    debug_vis: bool = False
-
-
-## 
 # Curriculum manager.
 ##
 

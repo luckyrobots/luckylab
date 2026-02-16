@@ -44,11 +44,11 @@ class NanGuardCfg:
         verbose: Print warnings when NaN detected.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     buffer_size: int = 100
     output_dir: str = "/tmp/luckylab/nan_dumps"
-    recovery_mode: bool = True
-    halt_on_nan: bool = False
+    recovery_mode: bool = False
+    halt_on_nan: bool = True
     check_actions: bool = True
     check_observations: bool = True
     check_rewards: bool = True
@@ -254,13 +254,11 @@ class NanGuard:
         is_torch = isinstance(tensor, torch.Tensor)
 
         if is_torch:
-            has_nan = torch.isnan(tensor).any().item()
-            has_inf = torch.isinf(tensor).any().item()
+            has_bad = not torch.isfinite(tensor).all().item()
         else:
-            has_nan = bool(np.any(np.isnan(tensor)))
-            has_inf = bool(np.any(np.isinf(tensor)))
+            has_bad = not bool(np.all(np.isfinite(tensor)))
 
-        if not (has_nan or has_inf):
+        if not has_bad:
             return tensor, False
 
         # Record stats
@@ -371,9 +369,9 @@ class NanGuard:
         self.stats.total_checks += 1
 
         if isinstance(reward, torch.Tensor):
-            has_nan = torch.isnan(reward).any().item() or torch.isinf(reward).any().item()
+            has_nan = not torch.isfinite(reward).all().item()
         else:
-            has_nan = np.isnan(reward) or np.isinf(reward)
+            has_nan = not np.isfinite(reward)
 
         if not has_nan:
             return reward, False

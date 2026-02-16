@@ -85,10 +85,10 @@ def last_action(env: ManagerBasedRlEnv, action_name: str | None = None) -> torch
 ##
 
 
-def generated_commands(env: ManagerBasedRlEnv, command_name: str) -> torch.Tensor:
-    command = env.command_manager.get_command(command_name)
-    assert command is not None
-    return command
+def generated_commands(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Velocity command from LuckyEngine (populated via observation vector)."""
+    asset: Entity = env.scene["robot"]
+    return asset.data.vel_command
 
 
 ##

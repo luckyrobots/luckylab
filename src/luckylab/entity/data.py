@@ -75,6 +75,15 @@ class ObservationSchema:
                 "foot_force": (4, "foot_contact_forces"),  # Alias
                 "foot_air_time": (4, "foot_air_time"),
                 "foot_air_times": (4, "foot_air_time"),  # Alias
+                # Foot velocities (world frame) - 12 floats: 4 feet × 3 components
+                "foot_velocity": (12, "foot_velocity"),
+                "foot_velocities": (12, "foot_velocity"),  # Alias
+                # Illegal contact flag - 1 float: 1.0 if non-foot body touches ground
+                "illegal_contact": (1, "illegal_contact"),
+                # Velocity command (sampled by LuckyEngine) - 3 floats: vx, vy, wz
+                "vel_command": (3, "vel_command"),
+                "velocity_command": (3, "vel_command"),
+                "cmd_vel": (3, "vel_command"),
             }
         )
 
@@ -141,6 +150,11 @@ class EntityData:
     _foot_height: torch.Tensor = field(init=False)
     _foot_contact_forces: torch.Tensor = field(init=False)
     _foot_air_time: torch.Tensor = field(init=False)
+    _foot_velocity: torch.Tensor = field(init=False)  # (num_envs, 12) flat from engine
+    _foot_velocity_reshaped: torch.Tensor = field(init=False)  # (num_envs, 4, 3) view
+    _illegal_contact: torch.Tensor = field(init=False)  # (num_envs, 1)
+    # Velocity command (sampled by LuckyEngine)
+    _vel_command: torch.Tensor = field(init=False)  # (num_envs, 3)
     # Joint limits and action scales
     _soft_joint_pos_limits: torch.Tensor = field(init=False)
     _action_scale: torch.Tensor = field(init=False)
@@ -157,11 +171,14 @@ class EntityData:
         self._joint_vel = torch.zeros(self.num_envs, self.num_joints, device=self.device)
         self._default_joint_pos = torch.zeros(self.num_envs, self.num_joints, device=self.device)
         self._default_joint_vel = torch.zeros(self.num_envs, self.num_joints, device=self.device)
-        # Privileged observation buffers (4 feet for quadrupeds: FR, FL, RR, RL)
         self._foot_contact = torch.zeros(self.num_envs, 4, device=self.device)
         self._foot_height = torch.zeros(self.num_envs, 4, device=self.device)
         self._foot_contact_forces = torch.zeros(self.num_envs, 4, device=self.device)
         self._foot_air_time = torch.zeros(self.num_envs, 4, device=self.device)
+        self._foot_velocity = torch.zeros(self.num_envs, 12, device=self.device)
+        self._foot_velocity_reshaped = self._foot_velocity.view(self.num_envs, 4, 3)
+        self._illegal_contact = torch.zeros(self.num_envs, 1, device=self.device)
+        self._vel_command = torch.zeros(self.num_envs, 3, device=self.device)
         # Joint limits: shape (num_envs, num_joints, 2) where [:, :, 0] is lower, [:, :, 1] is upper
         self._soft_joint_pos_limits = torch.zeros(self.num_envs, self.num_joints, 2, device=self.device)
         # Action scale per joint: shape (num_joints,)
@@ -183,6 +200,9 @@ class EntityData:
             "foot_height": self._foot_height,
             "foot_contact_forces": self._foot_contact_forces,
             "foot_air_time": self._foot_air_time,
+            "foot_velocity": self._foot_velocity,
+            "illegal_contact": self._illegal_contact,
+            "vel_command": self._vel_command,
         }
 
     def set_default_joint_pos(self, default_positions: list[float] | torch.Tensor) -> None:
@@ -278,23 +298,38 @@ class EntityData:
 
     @property
     def foot_contact(self) -> torch.Tensor:
-        """Foot contact states (binary). Shape (num_envs, 4). Order: FR, FL, RR, RL."""
+        """Foot contact states (binary). Shape (num_envs, 4). Order: FL, FR, RL, RR."""
         return self._foot_contact
 
     @property
     def foot_height(self) -> torch.Tensor:
-        """Foot heights above ground in meters. Shape (num_envs, 4). Order: FR, FL, RR, RL."""
+        """Foot heights above ground in meters. Shape (num_envs, 4). Order: FL, FR, RL, RR."""
         return self._foot_height
 
     @property
     def foot_contact_forces(self) -> torch.Tensor:
-        """Foot contact force magnitudes in Newtons. Shape (num_envs, 4). Order: FR, FL, RR, RL."""
+        """Foot contact force magnitudes in Newtons. Shape (num_envs, 4). Order: FL, FR, RL, RR."""
         return self._foot_contact_forces
 
     @property
     def foot_air_time(self) -> torch.Tensor:
-        """Time since last foot contact in seconds. Shape (num_envs, 4). Order: FR, FL, RR, RL."""
+        """Time since last foot contact in seconds. Shape (num_envs, 4). Order: FL, FR, RL, RR."""
         return self._foot_air_time
+
+    @property
+    def foot_velocity(self) -> torch.Tensor:
+        """Foot linear velocities in world frame. Shape (num_envs, 4, 3). Order: FL, FR, RL, RR."""
+        return self._foot_velocity_reshaped
+
+    @property
+    def illegal_contact(self) -> torch.Tensor:
+        """Whether any non-foot body is touching the ground. Shape (num_envs,). 1.0 = illegal contact."""
+        return self._illegal_contact.squeeze(-1)
+
+    @property
+    def vel_command(self) -> torch.Tensor:
+        """Velocity command from LuckyEngine (vx, vy, wz). Shape (num_envs, 3)."""
+        return self._vel_command
 
     # Derived properties
 
@@ -418,6 +453,9 @@ class EntityData:
         self._projected_gravity_b[env_ids, 2] = -1.0
         self._joint_pos[env_ids] = self._default_joint_pos[env_ids]
         self._joint_vel[env_ids] = 0.0
+        self._foot_velocity[env_ids] = 0.0
+        self._illegal_contact[env_ids] = 0.0
+        self._vel_command[env_ids] = 0.0
 
     def validate_observations(self, observation_names: list[str]) -> dict[str, bool]:
         """Check which observations are available from the engine.
@@ -437,6 +475,8 @@ class EntityData:
             "foot_height": False,
             "foot_contact_forces": False,
             "foot_air_time": False,
+            "foot_velocity": False,
+            "illegal_contact": False,
         }
 
         for name in observation_names:

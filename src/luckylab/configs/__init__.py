@@ -1,3 +1,3 @@
 """Configuration classes for luckylab."""
 
-from luckylab.configs.domain_randomization import PhysicsDRCfg as PhysicsDRCfg
+from luckylab.configs.simulation_contract import SimulationContract as SimulationContract

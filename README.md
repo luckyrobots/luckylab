@@ -6,9 +6,12 @@ Reinforcement learning framework for robotics simulation with LuckyEngine.
 
 - **Manager-based RL environments** following Isaac Lab / mjlab patterns
 - **Config-driven MDP components** with direct function references
-- **Multiple RL algorithms** via skrl: PPO, SAC, TD3, DDPG
-- **PyTorch and JAX backends** for training
-- **Task-agnostic logging** with TensorBoard and Weights & Biases support
+- **Dual RL backends** — [skrl](https://github.com/Toni-SM/skrl) and [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3)
+- **Multiple RL algorithms** — PPO, SAC, TD3, DDPG
+- **Keyboard control** for interactive evaluation (WASD + QE)
+- **NaN guard** with recovery mode for safe training
+- **Debug visualization** via LuckyEngine viewer
+- **Logging** with TensorBoard and Weights & Biases
 
 ## Installation
 
@@ -20,20 +23,65 @@ uv pip install luckylab
 pip install luckylab
 ```
 
-### Optional Dependencies
+## Quickstart
+
+### Training with CLI
+
+LuckyLab uses [tyro](https://github.com/brentyi/tyro) for CLI parsing. The task name is a positional argument, followed by `--agent.algorithm` and `--agent.backend`:
 
 ```bash
-# JAX backend support
-uv pip install "luckylab[jax]"
+# Train with SAC on the skrl backend
+python -m luckylab.scripts.train go2_velocity_flat --agent.algorithm sac --agent.backend skrl
 
-# All logging backends
-uv pip install "luckylab[logging]"
+# Train with SAC on Stable Baselines3
+python -m luckylab.scripts.train go2_velocity_flat --agent.algorithm sac --agent.backend sb3
 
-# Everything
-uv pip install "luckylab[all]"
+# Train with PPO on GPU
+python -m luckylab.scripts.train go2_velocity_flat --agent.algorithm ppo --agent.backend skrl --device cuda
+
+# Override training hyperparameters
+python -m luckylab.scripts.train go2_velocity_flat --agent.algorithm sac --agent.backend skrl --agent.max-iterations 500
+
+# Run in realtime mode (for visual debugging)
+python -m luckylab.scripts.train go2_velocity_flat --agent.algorithm sac --agent.backend skrl --env.simulation-mode realtime
 ```
 
-## Quickstart
+### Playing a Trained Policy
+
+```bash
+# Evaluate a checkpoint
+python -m luckylab.scripts.play go2_velocity_flat --algorithm sac \
+    --checkpoint runs/go2_velocity_sac/checkpoints/best_agent.pt
+
+# Interactive keyboard control (WASD + QE for velocity commands)
+python -m luckylab.scripts.play go2_velocity_flat --algorithm sac \
+    --checkpoint runs/go2_velocity_sac/checkpoints/best_agent.pt --keyboard
+```
+
+Keyboard controls (`--keyboard` mode):
+- **W/S** forward/backward, **A/D** strafe left/right, **Q/E** turn left/right
+- **Space** zero all commands, **Esc** quit
+
+### Training Programmatically
+
+```python
+from luckylab.rl import train, RlRunnerCfg
+from luckylab.tasks import load_env_cfg
+
+# Load task configuration
+env_cfg = load_env_cfg("go2_velocity_flat")
+
+# Configure training
+rl_cfg = RlRunnerCfg(
+    algorithm="sac",
+    backend="skrl",
+    max_iterations=1_000,
+    seed=42,
+)
+
+# Train
+train(env_cfg=env_cfg, rl_cfg=rl_cfg, device="cuda")
+```
 
 ### Basic Environment Usage
 
@@ -42,12 +90,11 @@ from luckylab.envs import ManagerBasedRlEnv
 from luckylab.tasks.velocity import create_velocity_env_cfg
 
 # Create environment config
-cfg = create_velocity_env_cfg(robot="unitreego1")
+cfg = create_velocity_env_cfg(robot="unitreego2")
 
-# Create environment
+# Create environment (standard Gymnasium interface)
 env = ManagerBasedRlEnv(cfg=cfg)
 
-# Standard Gymnasium interface
 obs, info = env.reset()
 
 for _ in range(1000):
@@ -60,43 +107,6 @@ for _ in range(1000):
 env.close()
 ```
 
-### Training with CLI
-
-```bash
-# Train with PPO (default)
-python -m luckylab.scripts.train --task go1_velocity_flat
-
-# Train with SAC on GPU
-python -m luckylab.scripts.train --task go1_velocity_flat --algorithm sac --device cuda
-
-# Train with JAX backend
-python -m luckylab.scripts.train --task go1_velocity_flat --backend jax
-
-# With Weights & Biases logging
-python -m luckylab.scripts.train --task go1_velocity_flat --logger wandb
-```
-
-### Training Programmatically
-
-```python
-from luckylab.rl import train, SkrlCfg
-from luckylab.tasks import load_env_cfg
-
-# Load task configuration
-env_cfg = load_env_cfg("go1_velocity_flat")
-
-# Configure training
-rl_cfg = SkrlCfg(
-    algorithm="ppo",
-    backend="torch",
-    timesteps=1_000_000,
-    seed=42,
-)
-
-# Train
-train(env_cfg=env_cfg, rl_cfg=rl_cfg, device="cuda")
-```
-
 ## Architecture
 
 LuckyLab uses a manager-based architecture where each MDP component is handled by a dedicated manager:
@@ -105,7 +115,6 @@ LuckyLab uses a manager-based architecture where each MDP component is handled b
 ManagerBasedRlEnv
 ├── RewardManager        # Config-driven reward computation
 ├── TerminationManager   # Config-driven termination detection
-├── CommandManager       # Velocity command generation
 ├── CurriculumManager    # Progressive difficulty adjustment
 └── ObservationManager   # Observation processing (noise, delay, history)
 ```
@@ -143,21 +152,31 @@ terminations = {
 
 | Task ID | Description | Robot |
 |---------|-------------|-------|
-| `go1_velocity_flat` | Velocity tracking on flat terrain | Unitree Go1 |
+| `go2_velocity_flat` | Velocity tracking on flat terrain | Unitree Go2 |
+| `go2_velocity_rough` | Velocity tracking on rough terrain | Unitree Go2 |
 
 ## Project Structure
 
 ```
 src/luckylab/
 ├── configs/          # Configuration dataclasses
+├── entity/           # Entity data (observations, state)
 ├── envs/             # Environment implementations
 │   └── mdp/          # Common MDP functions
-├── managers/         # Manager classes
-├── rl/               # RL training (skrl integration)
-├── scripts/          # CLI tools (train, play, etc.)
+├── managers/         # Manager classes (reward, termination, etc.)
+├── rl/               # RL training
+│   ├── skrl/         # skrl backend (models, trainer, wrapper)
+│   ├── sb3/          # Stable Baselines3 backend (trainer, wrapper)
+│   ├── config.py     # RlRunnerCfg and algorithm configs
+│   ├── common.py     # Shared utilities (print_config, wrap_env)
+│   └── trainer.py    # Backend-agnostic train/load entry point
+├── scene/            # Scene management
+├── scripts/          # CLI tools (train, play, list_envs)
 ├── tasks/            # Task definitions
 │   └── velocity/     # Velocity tracking task
-└── utils/            # Utilities (logging, buffers, etc.)
+│       └── config/   # Per-robot configs (go2/)
+├── utils/            # Utilities (logging, NaN guard, keyboard, math, etc.)
+└── viewer/           # Debug visualization (debug_draw, run_policy)
 ```
 
 ## Development
@@ -185,7 +204,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development guidelines.
 
 - Python 3.10+
 - LuckyEngine simulator
-- luckyrobots >= 0.1.70
+- luckyrobots >= 0.1.77
 
 ## Acknowledgments
 

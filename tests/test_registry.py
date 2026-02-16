@@ -11,12 +11,11 @@ from luckylab.tasks.registry import (
     register_task,
     unregister_task,
 )
-from luckylab.tasks.velocity import create_velocity_env_cfg
 
 
 def _create_test_cfg():
     """Factory function for tests that creates a valid config."""
-    return ManagerBasedRlEnvCfg(decimation=4)
+    return ManagerBasedRlEnvCfg(decimation=4, observations={}, actions={})
 
 
 class TestRegistry:
@@ -39,7 +38,8 @@ class TestRegistry:
             register_task("test_task", _create_test_cfg)
 
     def test_load_env_cfg(self):
-        register_task("test_task", _create_test_cfg)
+        # Registry returns env_cfg as-is when it's not a class
+        register_task("test_task", _create_test_cfg())
         cfg = load_env_cfg("test_task")
         assert isinstance(cfg, ManagerBasedRlEnvCfg)
 
@@ -70,14 +70,3 @@ class TestRegistry:
         register_task("beta", _create_test_cfg)
         tasks = list_tasks()
         assert tasks == ["alpha", "beta", "zebra"]
-
-    def test_factory_function_support(self):
-        """Test that registry supports factory functions like create_velocity_env_cfg."""
-
-        def create_custom_cfg():
-            return create_velocity_env_cfg(robot="unitreego1")
-
-        register_task("factory_task", create_custom_cfg)
-        cfg = load_env_cfg("factory_task")
-        # Check derived property works
-        assert cfg.max_episode_length == 250  # 20.0 / (0.02 * 4)

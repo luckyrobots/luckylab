@@ -26,7 +26,7 @@ def register_task(
     Register a task with its environment configuration and RL configs per algorithm.
 
     Args:
-        task_id: Unique identifier for the task (e.g., "go1_velocity_flat")
+        task_id: Unique identifier for the task (e.g., "go2_velocity_flat")
         env_cfg: The environment configuration class, instance, or factory function
         rl_cfgs: Dict mapping algorithm name to RL config (e.g., {"ppo": ..., "sac": ...})
     """
@@ -65,7 +65,7 @@ def load_env_cfg(task_id: str) -> object:
     return env_cfg
 
 
-def load_rl_cfg(task_id: str, algorithm: str = "ppo") -> "RlRunnerCfg | None":
+def load_rl_cfg(task_id: str, algorithm: str) -> "RlRunnerCfg | None":
     """
     Load the RL training configuration for a task and algorithm.
 

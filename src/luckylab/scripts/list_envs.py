@@ -27,8 +27,8 @@ def main():
     print("\n" + "=" * 60)
     print("Gymnasium Environments")
     print("=" * 60)
-    print("\n  luckylab/UnitreeGo1-Locomotion-v0")
-    print("    Default environment for Unitree Go1 velocity tracking")
+    print("\n  luckylab/UnitreeGo2-Locomotion-v0")
+    print("    Default environment for Unitree Go2 velocity tracking")
 
     print("\n" + "=" * 60)
 

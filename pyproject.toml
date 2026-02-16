@@ -23,40 +23,16 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "luckyrobots>=0.1.73",
+    "luckyrobots>=0.1.78",
     "gymnasium>=0.29.1",
     "numpy>=1.24.0",
     "prettytable>=3.10.0",
     "torch>=2.0.0",
     "skrl>=1.3.0",
+    "stable-baselines3>=2.0.0",
+    "tensorboard>=2.15.0",
     "tyro>=0.8.0",
     "wandb>=0.24.1",
-]
-
-[project.optional-dependencies]
-# JAX backend (install JAX with GPU support separately for GPU training)
-jax = [
-    "jax>=0.4.20",
-    "jaxlib>=0.4.20",
-    "flax>=0.8.0",
-    "optax>=0.2.0",
-]
-# Logging backends
-wandb = ["wandb>=0.16.0"]
-tensorboard = ["tensorboard>=2.15.0"]
-# All logging
-logging = [
-    "wandb>=0.16.0",
-    "tensorboard>=2.15.0",
-]
-# Full installation with all optional dependencies
-all = [
-    "jax>=0.4.20",
-    "jaxlib>=0.4.20",
-    "flax>=0.8.0",
-    "optax>=0.2.0",
-    "wandb>=0.16.0",
-    "tensorboard>=2.15.0",
 ]
 
 [project.urls]
