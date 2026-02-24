@@ -27,17 +27,55 @@ def is_terminated(env: ManagerBasedRlEnv) -> torch.Tensor:
   return env.termination_manager.terminated.float()
 
 
-# TODO: Missing joint_torques_l2
-
-
-# TODO: Missing joint_acc_l2
-
-
 def action_rate_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
   """Penalize the rate of change of the actions using L2 squared kernel."""
   return torch.sum(
     torch.square(env.action_manager.action - env.action_manager.prev_action), dim=1
   )
+
+
+class action_acc_l2:
+    """Penalize action acceleration (second derivative of actions).
+
+    Returns sum((a - 2*a_prev + a_prev_prev)^2).
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+        self._prev_prev_action = torch.zeros(
+            env.num_envs, env.action_manager.total_action_dim, device=env.device
+        )
+        self._prev_action = torch.zeros_like(self._prev_prev_action)
+
+    def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+        action = env.action_manager.action
+        acc = action - 2.0 * self._prev_action + self._prev_prev_action
+        self._prev_prev_action[:] = self._prev_action
+        self._prev_action[:] = action
+        return torch.sum(torch.square(acc), dim=1)
+
+
+class joint_acc_l2:
+    """Penalize joint acceleration ((joint_vel - prev_joint_vel) / dt)^2.
+
+    Returns sum(((joint_vel - prev_joint_vel) / dt)^2).
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+        self._prev_joint_vel = torch.zeros(
+            env.num_envs, env.scene["robot"].num_joints, device=env.device
+        )
+        self._dt = env.step_dt
+
+    def __call__(
+        self,
+        env: ManagerBasedRlEnv,
+        asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    ) -> torch.Tensor:
+        asset: Entity = env.scene[asset_cfg.name]
+        joint_vel = asset.data.joint_vel
+        joint_acc = (joint_vel - self._prev_joint_vel) / self._dt
+        self._prev_joint_vel[:] = joint_vel
+        return torch.sum(torch.square(joint_acc), dim=1)
 
 
 def joint_pos_limits(
@@ -92,13 +130,60 @@ class posture:
         return torch.exp(-torch.mean(error_squared / (self.std**2), dim=1))
 
 
-# TODO: Missing electrical_power_cost penalty
-
-
 def flat_orientation_l2(
   env: ManagerBasedRlEnv,
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-  """Penalize non-flat base orientation."""
+  """Penalize non-flat base orientation (grav_x^2 + grav_y^2)."""
   asset: Entity = env.scene[asset_cfg.name]
   return torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
+
+
+def lin_vel_z_l2(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Penalize vertical linear velocity (vz^2)."""
+    asset: Entity = env.scene[asset_cfg.name]
+    return torch.square(asset.data.root_link_lin_vel_b[:, 2])
+
+
+def ang_vel_xy_l2(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Penalize roll/pitch angular velocity (wx^2 + wy^2) in body frame."""
+    asset: Entity = env.scene[asset_cfg.name]
+    return torch.sum(torch.square(asset.data.root_link_ang_vel_b[:, :2]), dim=1)
+
+
+def illegal_contact(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Penalize non-foot body parts touching the ground."""
+    asset: Entity = env.scene[asset_cfg.name]
+    return asset.data.illegal_contact.float()
+
+
+def foot_clearance(
+    env: ManagerBasedRlEnv,
+    max_height: float = 0.15,
+    command_threshold: float = 0.1,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Reward foot height during swing phase (clamped). Gated by command magnitude.
+
+    Sums clamped foot heights across all 4 feet. Provides continuous gradient
+    for lifting feet higher, unlike binary feet_air_time. Returns zero when
+    command is near-zero so the robot learns to stand still.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    height = asset.data.foot_height  # (num_envs, 4)
+    clamped = torch.clamp(height, min=0.0, max=max_height)
+    reward = torch.sum(clamped, dim=1)
+    # Gate by command magnitude
+    command = asset.data.vel_command  # (num_envs, 3)
+    cmd_norm = torch.norm(command[:, :2], dim=1) + torch.abs(command[:, 2])
+    gate = (cmd_norm > command_threshold).float()
+    return reward * gate

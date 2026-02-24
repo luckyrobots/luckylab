@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "luckyrobots>=0.1.78",
+    "luckyrobots>=0.1.81",
     "gymnasium>=0.29.1",
     "numpy>=1.24.0",
     "prettytable>=3.10.0",
@@ -57,11 +57,20 @@ dev = [
     "ruff>=0.9.0",
     "pyright>=1.1.390",
 ]
+viewer = [
+    "mujoco>=3.0.0",
+    "viser>=0.2.0",
+    "trimesh>=4.0.0",
+    "pillow>=10.0.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+
+[tool.uv.sources]
+luckyrobots = { path = "../luckyrobots", editable = true }
 
 [tool.ruff]
 line-length = 110

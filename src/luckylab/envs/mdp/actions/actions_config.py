@@ -1,6 +1,7 @@
+import math
 from dataclasses import dataclass
 
-from luckylab.envs.mdp.actions import joint_actions
+from luckylab.envs.mdp.actions import joint_actions, cpg_action
 from luckylab.managers.action_manager import ActionTerm
 from luckylab.managers.manager_term_config import ActionTermCfg
 
@@ -32,3 +33,19 @@ class JointVelocityActionCfg(JointActionCfg):
 @dataclass(kw_only=True)
 class JointEffortActionCfg(JointActionCfg):
   class_type: type[ActionTerm] = joint_actions.JointEffortAction
+
+
+@dataclass(kw_only=True)
+class CPGActionCfg(JointPositionActionCfg):
+  """Joint position action with CPG gait scaffold."""
+  class_type: type[ActionTerm] = cpg_action.CPGAction
+  frequency: float = 2.0
+  """CPG oscillation frequency in Hz."""
+  amplitude_hip: float = 0.12
+  """Normalized amplitude for hip joints."""
+  amplitude_thigh: float = 0.50
+  """Normalized amplitude for thigh joints."""
+  amplitude_calf: float = 0.50
+  """Normalized amplitude for calf joints."""
+  calf_phase_offset: float = math.pi / 4.0
+  """Phase offset for calf relative to thigh."""

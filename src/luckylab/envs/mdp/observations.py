@@ -85,9 +85,12 @@ def last_action(env: ManagerBasedRlEnv, action_name: str | None = None) -> torch
 ##
 
 
-def generated_commands(env: ManagerBasedRlEnv) -> torch.Tensor:
+def generated_commands(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
     """Velocity command from LuckyEngine (populated via observation vector)."""
-    asset: Entity = env.scene["robot"]
+    asset: Entity = env.scene[asset_cfg.name]
     return asset.data.vel_command
 
 

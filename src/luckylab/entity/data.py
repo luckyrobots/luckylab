@@ -453,6 +453,10 @@ class EntityData:
         self._projected_gravity_b[env_ids, 2] = -1.0
         self._joint_pos[env_ids] = self._default_joint_pos[env_ids]
         self._joint_vel[env_ids] = 0.0
+        self._foot_contact[env_ids] = 0.0
+        self._foot_height[env_ids] = 0.0
+        self._foot_contact_forces[env_ids] = 0.0
+        self._foot_air_time[env_ids] = 0.0
         self._foot_velocity[env_ids] = 0.0
         self._illegal_contact[env_ids] = 0.0
         self._vel_command[env_ids] = 0.0

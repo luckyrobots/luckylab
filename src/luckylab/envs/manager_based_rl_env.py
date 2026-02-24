@@ -2,7 +2,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from luckyrobots import LuckyRobots
+from luckyrobots import Session
 import numpy as np
 import torch
 
@@ -56,7 +56,7 @@ class ManagerBasedRlEnvCfg:
     is_finite_horizon: bool = False
     """Whether the task has a finite horizon."""
 
-    # LuckyRobots connection.
+    # Session connection.
     scene: str = "velocity"
     """Scene name to load."""
     task: str = "locomotion"
@@ -90,9 +90,9 @@ class ManagerBasedRlEnvCfg:
 
 
 class ManagerBasedRlEnv:
-    """Manager-based RL environment for LuckyRobots.
+    """Manager-based RL environment for Session.
 
-    Connects to LuckyRobots via gRPC and provides a torch-native interface.
+    Connects to Session via gRPC and provides a torch-native interface.
     All behavior is driven by manager configurations.
     """
 
@@ -124,12 +124,12 @@ class ManagerBasedRlEnv:
             self._num_envs, dtype=torch.long, device=self._device
         )
 
-        # Connect to LuckyRobots.
-        self.luckyrobots = LuckyRobots(host=cfg.host, port=cfg.port)
+        # Connect to Session.
+        self.luckyrobots = Session(host=cfg.host, port=cfg.port)
         self._connect()
 
         # Get robot configuration.
-        robot_config = LuckyRobots.get_robot_config(cfg.robot)
+        robot_config = Session.get_robot_config(cfg.robot)
         self._num_joints = len(robot_config["action_space"]["actuator_limits"])
 
         # Fetch observation schema from engine.
@@ -245,7 +245,9 @@ class ManagerBasedRlEnv:
         # Get processed joint positions and step physics via gRPC.
         joint_positions = self.action_manager.processed_action
         joint_list = joint_positions[0].detach().cpu().tolist()
-        observation = self.luckyrobots.step(actions=joint_list)
+        observation = self.luckyrobots.engine_client.step(
+            actions=joint_list, step_timeout_s=self.cfg.step_timeout_s
+        )
 
         # Update entity data from observation (must happen before termination/reward checks).
         if observation.observation:
@@ -309,7 +311,7 @@ class ManagerBasedRlEnv:
     # Private methods.
 
     def _connect(self) -> None:
-        """Connect to LuckyRobots engine."""
+        """Connect to Session engine."""
         if self.cfg.skip_launch:
             print_info(f"Connecting to LuckyEngine at {self.cfg.host}:{self.cfg.port}")
             self.luckyrobots.connect(timeout_s=self.cfg.timeout_s, robot=self.cfg.robot)
@@ -398,8 +400,6 @@ class ManagerBasedRlEnv:
         # Batched spaces.
         self.observation_space = batch_space(self.single_observation_space, self._num_envs)
         self.action_space = batch_space(self.single_action_space, self._num_envs)
-
-        # Spaces configured (printed by trainer's consolidated summary).
 
     def _reset_idx(self, env_ids: torch.Tensor | None = None) -> None:
         # Update curriculum before reset — updates SimulationContract ranges.

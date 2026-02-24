@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
-
 from luckylab.entity import Entity
+from luckylab.envs.mdp.actions.cpg_action import CPGAction
 from luckylab.managers.scene_entity_config import SceneEntityCfg
+
+import torch
 
 if TYPE_CHECKING:
     from luckylab.envs import ManagerBasedRlEnv
@@ -13,38 +14,19 @@ if TYPE_CHECKING:
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 
-def foot_height(
-    env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
-) -> torch.Tensor:
-    asset: Entity = env.scene[asset_cfg.name]
-    return asset.data.foot_height
-
-
-def foot_air_time(
-    env: ManagerBasedRlEnv,
-    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
-) -> torch.Tensor:
-    asset: Entity = env.scene[asset_cfg.name]
-    return asset.data.foot_air_time
-
-
 def foot_contact(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
+    """Foot contact binary observation. Returns (num_envs, 4)."""
     asset: Entity = env.scene[asset_cfg.name]
     return asset.data.foot_contact
 
 
-def foot_contact_forces(
-    env: ManagerBasedRlEnv,
-    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
-) -> torch.Tensor:
-    """Foot contact forces with log transform for network input.
-
-    Matches mjlab: applies sign(f) * log1p(|f|) to compress the force
-    range for better network training stability.
-    """
-    asset: Entity = env.scene[asset_cfg.name]
-    forces = asset.data.foot_contact_forces
-    return torch.sign(forces) * torch.log1p(torch.abs(forces))
+def gait_phase(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """CPG gait phase observation: sin/cos per leg. Returns (num_envs, 8)."""
+    action_term = env.action_manager.get_term("joint_pos")
+    assert isinstance(action_term, CPGAction), (
+        "gait_phase observation requires CPGAction as the 'joint_pos' action term"
+    )
+    return action_term.get_leg_phase_obs()

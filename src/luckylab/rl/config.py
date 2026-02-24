@@ -99,6 +99,10 @@ class SacAlgorithmCfg:
     gradient_steps: int = 1
     """Number of gradient updates per environment step. Higher values (e.g., 32)
     improve sample efficiency for single-env training."""
+    lr_scheduler: str | None = None
+    """Learning rate scheduler: 'cosine', 'linear', or None (fixed)."""
+    lr_min: float = 3e-5
+    """Minimum learning rate for scheduler decay."""
     clip_actions: float | None = None
     """Clamp actions to [-clip, +clip] before sending to env. None = no clipping."""
 

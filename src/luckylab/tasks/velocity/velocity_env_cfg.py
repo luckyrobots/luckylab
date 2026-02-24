@@ -6,8 +6,9 @@ Robot-specific configurations are located in the config/ directory.
 
 import math
 
+from luckylab.configs.simulation_contract import SimulationContract
 from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnvCfg
-from luckylab.envs.mdp.actions import JointPositionActionCfg
+from luckylab.envs.mdp.actions import CPGActionCfg
 from luckylab.managers.manager_term_config import (
     ActionTermCfg,
     CurriculumTermCfg,
@@ -37,11 +38,16 @@ def create_velocity_env_cfg(
     """
 
     actions: dict[str, ActionTermCfg] = {
-        "joint_pos": JointPositionActionCfg(
+        "joint_pos": CPGActionCfg(
             asset_name="robot",
             actuator_names=(".*",),
             scale=action_scale,
             use_default_offset=True,
+            frequency=2.0,
+            amplitude_hip=0.12,
+            amplitude_thigh=0.50,
+            amplitude_calf=0.50,
+            calf_phase_offset=math.pi / 4.0,
         ),
     }
 
@@ -68,10 +74,7 @@ def create_velocity_env_cfg(
         ),
         "actions": ObservationTermCfg(func=mdp.last_action),
         "command": ObservationTermCfg(func=mdp.generated_commands),
-        "foot_height": ObservationTermCfg(func=mdp.foot_height),
-        "foot_air_time": ObservationTermCfg(func=mdp.foot_air_time),
-        "foot_contact": ObservationTermCfg(func=mdp.foot_contact),
-        "foot_contact_forces": ObservationTermCfg(func=mdp.foot_contact_forces),
+        "gait_phase": ObservationTermCfg(func=mdp.gait_phase),
     }
 
     observations: dict[str, ObservationGroupCfg] = {
@@ -83,93 +86,58 @@ def create_velocity_env_cfg(
     }
 
     rewards: dict[str, RewardTermCfg] = {
-        # -- Core tracking (baselined exp kernel, wider std for discovery) --
+        # --- Primary tracking (dominant signal) ---
         "track_linear_velocity": RewardTermCfg(
             func=mdp.track_linear_velocity,
-            weight=5.0,
-            params={"std": 0.7},
+            weight=2.0,
+            params={"sigma": 0.25},
         ),
         "track_angular_velocity": RewardTermCfg(
             func=mdp.track_angular_velocity,
-            weight=2.0,
-            params={"std": 0.7},
+            weight=1.5,
+            params={"sigma": 0.25},
         ),
-        # -- Shaping (bridge from standing to walking) --
-        "move_in_command_direction": RewardTermCfg(
-            func=mdp.move_in_command_direction,
-            weight=4.0,
+        # --- Gait shaping (secondary, NOT dominant) ---
+        "feet_air_time": RewardTermCfg(
+            func=mdp.feet_air_time,
+            weight=0.2,
+            params={"threshold_min": 0.05, "threshold_max": 0.5},
         ),
-        "upright": RewardTermCfg(
-            func=mdp.flat_orientation,
-            weight=1.0,
-            params={
-                "std": 0.7,
-                "asset_cfg": SceneEntityCfg("robot", body_names=(trunk_body_name,)),
-            },
-        ),
-        # -- Regularization --
-        "dof_pos_limits": RewardTermCfg(func=mdp.joint_pos_limits, weight=-1.0),
-        "action_rate_l2": RewardTermCfg(func=mdp.action_rate_l2, weight=-0.01),
-        # -- Gait quality (ramped by curriculum, start at 0) --
         "foot_clearance": RewardTermCfg(
-            func=mdp.feet_clearance,
-            weight=0.0,
-            params={
-                "target_height": 0.1,
-                "command_threshold": 0.05,
-            },
-        ),
-        "foot_swing_height": RewardTermCfg(
-            func=mdp.feet_swing_height,
-            weight=0.0,
-            params={
-                "target_height": 0.1,
-                "command_threshold": 0.05,
-            },
+            func=mdp.foot_clearance,
+            weight=0.25,
+            params={"max_height": 0.10},
         ),
         "foot_slip": RewardTermCfg(
-            func=mdp.feet_slip,
-            weight=0.0,
-            params={
-                "command_threshold": 0.05,
-            },
+            func=mdp.foot_slip_l2,
+            weight=-0.25,
         ),
-        "soft_landing": RewardTermCfg(
-            func=mdp.soft_landing,
-            weight=0.0,
-            params={
-                "command_threshold": 0.05,
-            },
+        "stand_still": RewardTermCfg(
+            func=mdp.stand_still,
+            weight=2.0,
         ),
-        # -- Gait nudge (speed-gated, 0 when standing) --
-        "trot_contact": RewardTermCfg(
-            func=mdp.trot_contact,
-            weight=0.5,
+        # --- Stability penalties ---
+        "lin_vel_z": RewardTermCfg(
+            func=mdp.lin_vel_z_l2,
+            weight=-2.0,
         ),
-        # "posture": RewardTermCfg(
-        #     func=mdp.variable_posture,
-        #     weight=0.0,
-        #     params={
-        #         "std_standing": {
-        #             ".*_hip_joint": 0.15,
-        #             ".*_thigh_joint": 0.15,
-        #             ".*_calf_joint": 0.15,
-        #         },
-        #         "std_walking": {
-        #             ".*_hip_joint": 0.5,
-        #             ".*_thigh_joint": 0.8,
-        #             ".*_calf_joint": 0.8,
-        #         },
-        #         "std_running": {
-        #             ".*_hip_joint": 0.8,
-        #             ".*_thigh_joint": 1.2,
-        #             ".*_calf_joint": 1.2,
-        #         },
-        #         "asset_cfg": SceneEntityCfg("robot"),
-        #         "walking_threshold": 1.0,
-        #         "running_threshold": 3.0,
-        #     },
-        # ),
+        "ang_vel_xy": RewardTermCfg(
+            func=mdp.ang_vel_xy_l2,
+            weight=-0.05,
+        ),
+        "orientation": RewardTermCfg(
+            func=mdp.flat_orientation_l2,
+            weight=-1.0,
+        ),
+        # --- Smoothness penalties ---
+        "action_rate": RewardTermCfg(
+            func=mdp.action_rate_l2,
+            weight=-0.01,
+        ),
+        "action_magnitude": RewardTermCfg(
+            func=mdp.action_l2,
+            weight=-0.01,
+        ),
     }
 
     terminations: dict[str, TerminationTermCfg] = {
@@ -180,71 +148,34 @@ def create_velocity_env_cfg(
         ),
     }
 
+    # Curriculum: forward first, then yaw, then lateral, then full range.
+    # This ordering prevents "turning-as-strafing" — the agent learns strong
+    # angular tracking (cmd_yaw=0) before lateral commands are introduced.
     curriculum: dict[str, CurriculumTermCfg] = {
-        "command_vel": CurriculumTermCfg(
+        "commands_vel": CurriculumTermCfg(
             func=mdp.commands_vel,
             params={
                 "velocity_stages": [
-                    {"step": 0, "lin_vel_x": (-1.0, 1.0), "ang_vel_z": (-1.0, 1.0)},
-                    {"step": 300_000, "lin_vel_x": (-1.5, 2.0), "ang_vel_z": (-1.5, 1.5)},
-                    {"step": 600_000, "lin_vel_x": (-2.0, 3.0), "ang_vel_z": (-2.0, 2.0)},
+                    # Phase 1 (0-500k): Forward/backward only
+                    {"step": 0, "lin_vel_x": (-0.5, 0.5), "lin_vel_y": (0.0, 0.0), "ang_vel_z": (0.0, 0.0)},
+                    # Phase 2 (500k-1M): Add yaw turning
+                    {"step": 500_000, "lin_vel_x": (-0.8, 0.8), "ang_vel_z": (-0.5, 0.5)},
+                    # Phase 3 (1M-1.5M): Add lateral movement
+                    {"step": 1_000_000, "lin_vel_x": (-0.8, 0.8), "lin_vel_y": (-0.3, 0.3), "ang_vel_z": (-0.8, 0.8)},
+                    # Phase 4 (1.5M+): Full range
+                    {"step": 1_500_000, "lin_vel_x": (-1.0, 1.0), "lin_vel_y": (-0.6, 0.6), "ang_vel_z": (-1.0, 1.0)},
                 ],
             },
         ),
-        "foot_clearance_weight": CurriculumTermCfg(
-            func=mdp.reward_weight,
-            params={
-                "reward_name": "foot_clearance",
-                "weight_stages": [
-                    {"step": 0, "weight": 0.0},
-                    {"step": 500_000, "weight": -0.1},
-                    {"step": 800_000, "weight": -0.5},
-                ],
-            },
-        ),
-        "foot_swing_height_weight": CurriculumTermCfg(
-            func=mdp.reward_weight,
-            params={
-                "reward_name": "foot_swing_height",
-                "weight_stages": [
-                    {"step": 0, "weight": 0.0},
-                    {"step": 500_000, "weight": -0.05},
-                    {"step": 800_000, "weight": -0.25},
-                ],
-            },
-        ),
-        "foot_slip_weight": CurriculumTermCfg(
-            func=mdp.reward_weight,
-            params={
-                "reward_name": "foot_slip",
-                "weight_stages": [
-                    {"step": 0, "weight": 0.0},
-                    {"step": 500_000, "weight": -0.025},
-                    {"step": 800_000, "weight": -0.1},
-                ],
-            },
-        ),
-        "soft_landing_weight": CurriculumTermCfg(
-            func=mdp.reward_weight,
-            params={
-                "reward_name": "soft_landing",
-                "weight_stages": [
-                    {"step": 0, "weight": 0.0},
-                    {"step": 500_000, "weight": -2.5e-5},
-                    {"step": 800_000, "weight": -1e-4},
-                ],
-            },
-        ),
-        # "posture_weight": CurriculumTermCfg(
-        #     func=mdp.reward_weight,
-        #     params={
-        #         "reward_name": "posture",
-        #         "weight_stages": [
-        #             {"step": 0, "weight": 0.0},
-        #         ],
-        #     },
-        # ),
     }
+
+    contract = SimulationContract(
+        vel_command_x_range=(-0.5, 0.5),
+        vel_command_y_range=(0.0, 0.0),
+        vel_command_yaw_range=(0.0, 0.0),
+        vel_command_standing_probability=0.1,
+        vel_command_resampling_time_range=(5.0, 10.0),
+    )
 
     return ManagerBasedRlEnvCfg(
         robot=robot,
@@ -255,6 +186,7 @@ def create_velocity_env_cfg(
         rewards=rewards,
         terminations=terminations,
         curriculum=curriculum,
+        simulation_contract=contract,
         sim_dt=0.005,
         decimation=4,
         episode_length_s=20.0,

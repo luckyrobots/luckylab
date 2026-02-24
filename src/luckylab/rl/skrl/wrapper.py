@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import torch
 from gymnasium.spaces import Box
@@ -20,15 +18,8 @@ class SkrlWrapper:
         self,
         env: ManagerBasedRlEnv,
         clip_actions: float | None = None,
-        use_delta_actions: bool = False,
-        delta_action_scale: float = 0.2,
+        **kwargs,
     ):
-        if use_delta_actions:
-            warnings.warn(
-                "use_delta_actions=True has no effect with the skrl backend. "
-                "Delta action accumulation is only implemented in Sb3Wrapper.",
-                stacklevel=2,
-            )
         self.env = env
         self.clip_actions = clip_actions
         self.nan_guard = NanGuard(env.cfg.nan_guard)
@@ -138,8 +129,6 @@ class SkrlWrapper:
                 "step": self.nan_guard.step_counter,
             }
 
-        dones = (terminated | truncated).to(dtype=torch.long)
-
         # Cache episode info for wandb logging (only present on reset steps).
         if "episode" in extras:
             self._last_episode_info = {
@@ -150,10 +139,7 @@ class SkrlWrapper:
         if not self.cfg.is_finite_horizon:
             extras["time_outs"] = truncated
 
-        # if self.is_realtime and self.visualizer.should_draw():
-        #     self.visualizer.draw_velocity_command()
-
-        return obs, rew, terminated, dones, extras
+        return obs, rew, terminated, truncated, extras
 
     def close(self) -> None:
         if self.nan_guard.enabled:

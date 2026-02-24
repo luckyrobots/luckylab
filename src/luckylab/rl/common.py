@@ -40,7 +40,7 @@ def print_config(
     print_info(f"  {experiment_name}")
     print_info("")
 
-    # --- Training + Environment (single table) ---
+    # --- Training + Environment ---
     t = PrettyTable(field_names=["Key", "Value"])
     t.header = False
     t.align = "l"
@@ -69,7 +69,7 @@ def print_config(
 
     t.add_row(["", ""])  # separator
 
-    # Algorithm hyperparams (compact)
+    # Algorithm hyperparams
     for f in fields(algo_cfg):
         val = getattr(algo_cfg, f.name)
         label = f.name.replace("_", " ").title()
@@ -81,30 +81,35 @@ def print_config(
     print_info(t.get_string())
     print_info("")
 
-    # --- Observations (compact) ---
+    # --- Observations ---
     obs_mgr = env.observation_manager
     for group_name in obs_mgr.active_terms:
         term_names = obs_mgr.active_terms[group_name]
         term_dims = obs_mgr.group_obs_term_dim[group_name]
         total = sum(d[0] if isinstance(d, tuple) else d for d in term_dims)
-        parts = [f"{name}({d[0] if isinstance(d, tuple) else d})" for name, d in zip(term_names, term_dims)]
-        print_info(f"  Observations [{group_name}] ({total}):")
-        line = "    "
-        for part in parts:
-            if len(line) + len(part) + 2 > 80:
-                print_info(line)
-                line = "    "
-            line += part + "  "
-        if line.strip():
-            print_info(line)
 
-    # --- Actions (compact) ---
+        ot = PrettyTable(field_names=["Observation", "Dims"])
+        ot.align["Observation"] = "l"
+        ot.align["Dims"] = "r"
+        ot.title = f"Observations [{group_name}] ({total})"
+        for name, d in zip(term_names, term_dims):
+            dim = d[0] if isinstance(d, tuple) else d
+            ot.add_row([name, dim])
+        print_info(ot.get_string())
+        print_info("")
+
+    # --- Actions ---
     act_mgr = env.action_manager
-    parts = [f"{name}({d})" for name, d in zip(act_mgr.active_terms, act_mgr.action_term_dim)]
-    print_info(f"  Actions ({act_mgr.total_action_dim}): {', '.join(parts)}")
+    at = PrettyTable(field_names=["Action", "Dims"])
+    at.align["Action"] = "l"
+    at.align["Dims"] = "r"
+    at.title = f"Actions ({act_mgr.total_action_dim})"
+    for name, d in zip(act_mgr.active_terms, act_mgr.action_term_dim):
+        at.add_row([name, d])
+    print_info(at.get_string())
     print_info("")
 
-    # --- Rewards (skip weight=0) ---
+    # --- Rewards ---
     rew_mgr = env.reward_manager
     active_rewards = [
         (name, cfg.weight)
@@ -112,18 +117,34 @@ def print_config(
         if cfg.weight != 0.0
     ]
     if active_rewards:
-        parts = [f"{name}({w:g})" for name, w in active_rewards]
-        print_info(f"  Rewards: {', '.join(parts)}")
+        rt = PrettyTable(field_names=["Reward", "Weight"])
+        rt.align["Reward"] = "l"
+        rt.align["Weight"] = "r"
+        rt.title = "Rewards"
+        for name, w in active_rewards:
+            rt.add_row([name, f"{w:g}"])
+        print_info(rt.get_string())
+        print_info("")
 
     # --- Terminations ---
     if env.termination_manager.active_terms:
-        print_info(f"  Terminations: {', '.join(env.termination_manager.active_terms)}")
+        tt = PrettyTable(field_names=["Termination"])
+        tt.align["Termination"] = "l"
+        tt.title = "Terminations"
+        for name in env.termination_manager.active_terms:
+            tt.add_row([name])
+        print_info(tt.get_string())
+        print_info("")
 
     # --- Curriculum ---
     if env.curriculum_manager.active_terms:
-        print_info(f"  Curriculum: {', '.join(env.curriculum_manager.active_terms)}")
-
-    print_info("")
+        ct = PrettyTable(field_names=["Curriculum"])
+        ct.align["Curriculum"] = "l"
+        ct.title = "Curriculum"
+        for name in env.curriculum_manager.active_terms:
+            ct.add_row([name])
+        print_info(ct.get_string())
+        print_info("")
 
 
 def wrap_env(env, rl_cfg: RlRunnerCfg, wrapper_cls):

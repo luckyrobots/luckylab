@@ -16,3 +16,9 @@ from luckylab.envs.mdp.actions.joint_actions import (
 from luckylab.envs.mdp.actions.joint_actions import (
     JointVelocityAction as JointVelocityAction,
 )
+from luckylab.envs.mdp.actions.actions_config import (
+    CPGActionCfg as CPGActionCfg,
+)
+from luckylab.envs.mdp.actions.cpg_action import (
+    CPGAction as CPGAction,
+)

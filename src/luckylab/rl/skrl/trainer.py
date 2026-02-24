@@ -5,9 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import torch
+from skrl.resources.preprocessors.torch import RunningStandardScaler
+
 from luckylab.rl.common import make_experiment_name, print_config, wrap_env
 from luckylab.rl.config import RlRunnerCfg
-from luckylab.rl.skrl.models import Critic, DeterministicActor, GaussianActor, QCritic
+from luckylab.rl.skrl.models import Critic, DeterministicActor, GaussianActor, GSDEActor, QCritic
 from luckylab.utils.logging import WandbLogger, print_info
 from luckylab.utils.random import seed_rng
 
@@ -69,7 +72,10 @@ def create_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None
         from skrl.agents.torch.sac import SAC
 
         sac = cfg.sac
-        policy = GaussianActor(obs_space, act_space, device, cfg.policy, squash_output=True)
+        if cfg.policy.noise_type == "gsde":
+            policy = GSDEActor(obs_space, act_space, device, cfg.policy)
+        else:
+            policy = GaussianActor(obs_space, act_space, device, cfg.policy, squash_output=True)
         models = {
             "policy": policy,
             "critic_1": QCritic(obs_space, act_space, device, cfg.policy),
@@ -78,6 +84,12 @@ def create_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None
             "target_critic_2": QCritic(obs_space, act_space, device, cfg.policy),
         }
         memory_size = sac.memory_size
+
+        # The reward manager scales rewards by dt for decimation-invariance
+        # (shared with PPO and other algorithms). SAC's entropy term doesn't
+        # scale with dt, so we undo it here before rewards enter the replay
+        # buffer. This keeps reward weights algorithm-agnostic.
+        step_dt = env.unwrapped.step_dt
         agent_cfg = {
             "batch_size": sac.batch_size,
             "discount_factor": sac.discount_factor,
@@ -91,9 +103,24 @@ def create_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None
             "random_timesteps": sac.random_timesteps,
             "learning_starts": sac.learning_starts,
             "gradient_steps": sac.gradient_steps,
+            "rewards_shaper": lambda rewards, *args, step_dt=step_dt, **kwargs: rewards / step_dt,
+            "state_preprocessor": RunningStandardScaler,
+            "state_preprocessor_kwargs": {"size": obs_space, "device": device},
         }
         if sac.target_entropy is not None:
             agent_cfg["target_entropy"] = sac.target_entropy
+        if sac.lr_scheduler == "cosine":
+            from torch.optim.lr_scheduler import CosineAnnealingLR
+            agent_cfg["learning_rate_scheduler"] = CosineAnnealingLR
+            agent_cfg["learning_rate_scheduler_kwargs"] = {"T_max": cfg.max_iterations, "eta_min": sac.lr_min}
+        elif sac.lr_scheduler == "linear":
+            from torch.optim.lr_scheduler import LinearLR
+            agent_cfg["learning_rate_scheduler"] = LinearLR
+            agent_cfg["learning_rate_scheduler_kwargs"] = {
+                "start_factor": 1.0,
+                "end_factor": sac.lr_min / sac.actor_learning_rate,
+                "total_iters": cfg.max_iterations,
+            }
         agent_cls = SAC
 
     elif cfg.algorithm == "td3":

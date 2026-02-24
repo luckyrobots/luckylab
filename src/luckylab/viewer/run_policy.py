@@ -24,6 +24,7 @@ Dependencies: mujoco, torch, numpy, viser, trimesh
 """
 
 import argparse
+import math
 import select
 import sys
 import termios
@@ -66,7 +67,6 @@ ACTION_SCALE = np.array(
     [0.3727530387083568, 0.3727530387083568, 0.24850202580557115] * 4,
     dtype=np.float64,
 )
-FOOT_GEOM_NAMES = ["FL", "FR", "RL", "RR"]
 
 # Sim timing
 SIM_DT = 0.005       # 200 Hz physics
@@ -74,8 +74,8 @@ DECIMATION = 4        # policy at 50 Hz
 CONTROL_DT = SIM_DT * DECIMATION
 
 # PD gains
-DEFAULT_KP = 40.0
-DEFAULT_KD = 1.0
+DEFAULT_KP = 100.0
+DEFAULT_KD = 2.0
 
 # Command limits
 CMD_LIMITS = {
@@ -87,18 +87,27 @@ CMD_LIMITS = {
 # Speed presets
 SPEED_STEPS = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0]
 
+# CPG parameters (must match CPGActionCfg in velocity_env_cfg.py)
+CPG_FREQUENCY = 2.0
+CPG_AMPLITUDE_HIP = 0.12
+CPG_AMPLITUDE_THIGH = 0.50
+CPG_AMPLITUDE_CALF = 0.50
+CPG_CALF_PHASE_OFFSET = math.pi / 4.0
+TROT_PHASES = np.array([0.0, math.pi, math.pi, 0.0])  # FL, FR, RL, RR
+
 
 # ---------------------------------------------------------------------------
-# Policy network (64 -> 256 -> 256 -> 256 -> 12, ELU, tanh output)
+# Policy network (56 -> 512 -> 256 -> 128 -> 12, ELU, tanh output)
+# Must match GaussianActor architecture from training.
 # ---------------------------------------------------------------------------
 class PolicyNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(64, 256), nn.ELU(),
-            nn.Linear(256, 256), nn.ELU(),
-            nn.Linear(256, 256), nn.ELU(),
-            nn.Linear(256, 12),
+            nn.Linear(56, 512), nn.ELU(),
+            nn.Linear(512, 256), nn.ELU(),
+            nn.Linear(256, 128), nn.ELU(),
+            nn.Linear(128, 12),
         )
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
@@ -341,11 +350,8 @@ def main():
     jnt_ids = [mujoco.mj_name2id(model, mjtObj.mjOBJ_JOINT, n) for n in JOINT_NAMES]
     jnt_qpos = np.array([model.jnt_qposadr[j] for j in jnt_ids])
     jnt_dof = np.array([model.jnt_dofadr[j] for j in jnt_ids])
-    foot_gids = np.array([
-        mujoco.mj_name2id(model, mjtObj.mjOBJ_GEOM, n) for n in FOOT_GEOM_NAMES
-    ])
 
-    # Load policy
+    # Load policy network
     policy = PolicyNet()
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     net_state = {k: v for k, v in ckpt["policy"].items() if k.startswith("net.")}
@@ -353,30 +359,63 @@ def main():
     policy.eval()
     print(f"Loaded checkpoint: {args.checkpoint}")
 
+    # Load observation normalizer (RunningStandardScaler from training)
+    obs_mean = np.zeros(56, dtype=np.float64)
+    obs_var = np.ones(56, dtype=np.float64)
+    if "state_preprocessor" in ckpt:
+        sp = ckpt["state_preprocessor"]
+        obs_mean = sp["running_mean"].numpy().astype(np.float64)
+        obs_var = sp["running_variance"].numpy().astype(np.float64)
+        print(f"Loaded observation normalizer (count={sp['current_count'].item():.0f})")
+    else:
+        print("WARNING: No state_preprocessor in checkpoint, using raw observations")
+
     # Mutable state
     prev_action = np.zeros(12, dtype=np.float64)
     command = np.zeros(3, dtype=np.float64)
-    foot_air_time = np.zeros(4, dtype=np.float64)
+    leg_phases = np.zeros(4, dtype=np.float64)  # CPG phase per leg
     target_pos = DEFAULT_JOINT_POS.copy()
     sim_step = 0
     paused = False
     speed_multiplier = 1.0
 
     def reset():
-        nonlocal prev_action, foot_air_time, target_pos, sim_step
+        nonlocal prev_action, leg_phases, target_pos, sim_step
         mujoco.mj_resetData(model, data)
         key_id = mujoco.mj_name2id(model, mjtObj.mjOBJ_KEY, "home")
         if key_id >= 0:
             mujoco.mj_resetDataKeyframe(model, data, key_id)
         mujoco.mj_forward(model, data)
         prev_action[:] = 0.0
-        foot_air_time[:] = 0.0
+        leg_phases[:] = 0.0
         target_pos[:] = DEFAULT_JOINT_POS
         sim_step = 0
 
     reset()
 
-    # Observation builder (64-dim)
+    def compute_cpg_reference() -> np.ndarray:
+        """Generate normalized [-1, 1] CPG reference for all 12 joints."""
+        phase = leg_phases + TROT_PHASES
+        hip = CPG_AMPLITUDE_HIP * np.sin(phase)          # (4,)
+        thigh = CPG_AMPLITUDE_THIGH * np.sin(phase)      # (4,)
+        calf = CPG_AMPLITUDE_CALF * np.sin(phase + CPG_CALF_PHASE_OFFSET)  # (4,)
+        # Interleave: [FL_hip, FL_thigh, FL_calf, FR_hip, ...]
+        ref = np.stack([hip, thigh, calf], axis=1)  # (4, 3)
+        return ref.reshape(12)
+
+    def get_gait_phase_obs() -> np.ndarray:
+        """Get sin/cos phase observation for each leg. Returns (8,)."""
+        phase = leg_phases + TROT_PHASES
+        sin_phase = np.sin(phase)  # (4,)
+        cos_phase = np.cos(phase)  # (4,)
+        # Interleave: [sin_FL, cos_FL, sin_FR, cos_FR, ...]
+        return np.stack([sin_phase, cos_phase], axis=1).reshape(8)
+
+    def normalize_obs(obs: np.ndarray) -> np.ndarray:
+        """Apply RunningStandardScaler normalization."""
+        return (obs - obs_mean) / (np.sqrt(obs_var) + 1e-8)
+
+    # Observation builder (56-dim, matching training)
     def build_obs():
         quat = data.qpos[3:7]
         base_lin_vel = _quat_rotate_inverse(quat, data.qvel[0:3])
@@ -384,28 +423,9 @@ def main():
         proj_grav = _quat_rotate_inverse(quat, np.array([0.0, 0.0, -1.0]))
         joint_pos_rel = data.qpos[jnt_qpos] - DEFAULT_JOINT_POS
         joint_vel = data.qvel[jnt_dof]
-        foot_height = data.geom_xpos[foot_gids, 2].copy()
+        gait_phase = get_gait_phase_obs()
 
-        foot_contact = np.zeros(4, dtype=np.float64)
-        foot_forces = np.zeros(4, dtype=np.float64)
-        for ci in range(data.ncon):
-            c = data.contact[ci]
-            for fi, gid in enumerate(foot_gids):
-                if c.geom1 == gid or c.geom2 == gid:
-                    foot_contact[fi] = 1.0
-                    cfrc = np.zeros(6)
-                    mujoco.mj_contactForce(model, data, ci, cfrc)
-                    foot_forces[fi] += abs(cfrc[0])
-
-        for fi in range(4):
-            if foot_contact[fi] > 0.5:
-                foot_air_time[fi] = 0.0
-            else:
-                foot_air_time[fi] += CONTROL_DT
-
-        foot_forces_log = np.sign(foot_forces) * np.log1p(np.abs(foot_forces))
-
-        return np.concatenate([
+        obs = np.concatenate([
             base_lin_vel,       # 0:3
             base_ang_vel,       # 3:6
             proj_grav,          # 6:9
@@ -413,19 +433,25 @@ def main():
             joint_vel,          # 21:33
             prev_action,        # 33:45
             command,            # 45:48
-            foot_height,        # 48:52
-            foot_air_time,      # 52:56
-            foot_contact,       # 56:60
-            foot_forces_log,    # 60:64
+            gait_phase,         # 48:56
         ])
+        return normalize_obs(obs)
 
     def policy_step():
-        nonlocal prev_action, target_pos
+        nonlocal prev_action, target_pos, leg_phases
+        # Advance CPG phase
+        leg_phases += 2.0 * math.pi * CPG_FREQUENCY * CONTROL_DT
+        leg_phases %= 2.0 * math.pi
+
         obs_t = torch.from_numpy(build_obs()).float().unsqueeze(0)
         with torch.no_grad():
             action = policy(obs_t).squeeze(0).numpy()
         prev_action[:] = action
-        target_pos[:] = action * ACTION_SCALE + DEFAULT_JOINT_POS
+
+        # Combine policy output with CPG reference (matches CPGAction.process_actions)
+        cpg_ref = compute_cpg_reference()
+        combined = np.clip(action + cpg_ref, -1.0, 1.0)
+        target_pos[:] = combined * ACTION_SCALE + DEFAULT_JOINT_POS
 
     kp, kd = args.kp, args.kd
 
