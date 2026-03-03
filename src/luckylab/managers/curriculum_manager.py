@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Sequence
 
 import torch
@@ -13,6 +14,8 @@ from luckylab.managers.manager_term_config import CurriculumTermCfg
 if TYPE_CHECKING:
     from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
+logger = logging.getLogger(__name__)
+
 
 class CurriculumManager(ManagerBase):
     _env: ManagerBasedRlEnv
@@ -20,12 +23,12 @@ class CurriculumManager(ManagerBase):
     def __init__(self, cfg: dict[str, CurriculumTermCfg], env: ManagerBasedRlEnv):
         self._term_names: list[str] = []
         self._term_cfgs: list[CurriculumTermCfg] = []
-        self._class_term_cfgs: list[CurriculumTermCfg] = list()
+        self._class_term_cfgs: list[CurriculumTermCfg] = []
 
         self.cfg = cfg
         super().__init__(env=env)
 
-        self._curriculum_state = dict()
+        self._curriculum_state = {}
         for term_name in self._term_names:
             self._curriculum_state[term_name] = None
 
@@ -94,7 +97,7 @@ class CurriculumManager(ManagerBase):
         for term_name, term_cfg in self.cfg.items():
             term_cfg: CurriculumTermCfg | None
             if term_cfg is None:
-                print(f"term: {term_name} set to None, skipping...")
+                logger.debug("term: %s set to None, skipping", term_name)
                 continue
             self._resolve_common_term_cfg(term_name, term_cfg)
             self._term_names.append(term_name)

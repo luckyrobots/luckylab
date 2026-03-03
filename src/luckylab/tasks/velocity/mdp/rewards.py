@@ -51,20 +51,28 @@ def track_angular_velocity(
 def stand_still(
     env: ManagerBasedRlEnv,
     command_threshold: float = 0.1,
+    vel_sigma: float = 0.5,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Reward all feet in contact when command is near zero.
+    """Reward being still when command is near zero.
 
-    When the robot is told to stand (command magnitude below threshold),
-    rewards having all four feet on the ground. Returns 0 when moving.
-    Teaches the policy to suppress CPG residuals and stabilize in place.
+    Uses exponential decay based on base velocity and joint velocity so that
+    any movement is penalized. The policy must learn to cancel the CPG
+    (by outputting -cpg_ref) to achieve zero joint velocity. Returns 0
+    when a non-zero command is active.
     """
     asset: Entity = env.scene[asset_cfg.name]
     command = asset.data.vel_command
     cmd_norm = torch.norm(command[:, :2], dim=1) + torch.abs(command[:, 2])
     is_standing = (cmd_norm < command_threshold).float()
-    all_contact = torch.sum(asset.data.foot_contact, dim=1) / 4.0
-    return is_standing * all_contact
+
+    base_vel_sq = torch.sum(torch.square(asset.data.root_link_lin_vel_b[:, :2]), dim=1)
+    base_ang_vel_sq = torch.square(asset.data.root_link_ang_vel_b[:, 2])
+    joint_vel_sq = torch.mean(torch.square(asset.data.joint_vel), dim=1)
+
+    motion = base_vel_sq + base_ang_vel_sq + 0.1 * joint_vel_sq
+    stillness = torch.exp(-motion / vel_sigma)
+    return is_standing * stillness
 
 
 def action_l2(env: ManagerBasedRlEnv) -> torch.Tensor:

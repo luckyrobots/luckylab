@@ -1,9 +1,9 @@
 """RL configuration for Unitree Go2 velocity task."""
 
 from luckylab.rl.config import (
-    RlRunnerCfg,
     ActorCriticCfg,
     PpoAlgorithmCfg,
+    RlRunnerCfg,
     SacAlgorithmCfg,
 )
 
@@ -40,7 +40,7 @@ UNITREE_GO2_PPO_RUNNER_CFG = RlRunnerCfg(
 UNITREE_GO2_SAC_RUNNER_CFG = RlRunnerCfg(
     algorithm="sac",
     seed=42,
-    max_iterations=3_000_000,
+    max_iterations=4_000_000,
     policy=ActorCriticCfg(
         actor_hidden_dims=(512, 256, 128),
         critic_hidden_dims=(512, 256, 128),

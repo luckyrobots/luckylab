@@ -1,16 +1,19 @@
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from luckyrobots import Session
 import numpy as np
 import torch
+from gymnasium.spaces import Box
+from gymnasium.spaces import Dict as DictSpace
+from gymnasium.vector.utils import batch_space
+from luckyrobots import Session
 
-
-from luckylab.envs import types
 from luckylab.configs.simulation_contract import SimulationContract
 from luckylab.entity import Entity, EntityCfg
-from luckylab.scene import Scene
+from luckylab.envs import types
 from luckylab.managers.action_manager import ActionManager
 from luckylab.managers.curriculum_manager import CurriculumManager, NullCurriculumManager
 from luckylab.managers.manager_term_config import (
@@ -23,12 +26,13 @@ from luckylab.managers.manager_term_config import (
 from luckylab.managers.observation_manager import ObservationManager
 from luckylab.managers.reward_manager import RewardManager
 from luckylab.managers.termination_manager import TerminationManager
-from gymnasium.spaces import Box, Dict as DictSpace
-from gymnasium.vector.utils import batch_space
-
+from luckylab.scene import Scene
 from luckylab.utils import random as random_utils
 from luckylab.utils.logging import print_info
 from luckylab.utils.nan_guard import NanGuardCfg
+
+if TYPE_CHECKING:
+    from luckylab.utils.rerun_logger import RerunLogger
 
 
 @dataclass(kw_only=True)
@@ -63,7 +67,7 @@ class ManagerBasedRlEnvCfg:
     """Task name."""
     robot: str = "unitreego2"
     """Robot name."""
-    host: str = "172.24.160.1"
+    host: str = "localhost"
     """gRPC host address."""
     port: int = 50051
     """gRPC port."""
@@ -140,6 +144,9 @@ class ManagerBasedRlEnv:
         self._init_scene(robot_config)
         self._load_managers()
 
+        # Optional rerun logger (set externally before training starts).
+        self._rerun_logger: RerunLogger | None = None
+
         # Env ready (summary printed by trainer).
 
     # Properties.
@@ -178,6 +185,15 @@ class ManagerBasedRlEnv:
     def unwrapped(self) -> "ManagerBasedRlEnv":
         """Return the unwrapped environment."""
         return self
+
+    @property
+    def rerun_logger(self) -> RerunLogger | None:
+        """Optional rerun logger for live visualization."""
+        return self._rerun_logger
+
+    @rerun_logger.setter
+    def rerun_logger(self, logger: RerunLogger | None) -> None:
+        self._rerun_logger = logger
 
     # Methods.
 
@@ -272,6 +288,9 @@ class ManagerBasedRlEnv:
             self._reset_idx(reset_env_ids)
 
         self.obs_buf = self.observation_manager.compute(update_history=True)
+
+        if self._rerun_logger is not None:
+            self._rerun_logger.on_rl_step(self, self.common_step_counter)
 
         return (
             self.obs_buf,
@@ -414,7 +433,7 @@ class ManagerBasedRlEnv:
             self.scene["robot"].data.update_from_observation(obs_tensor, self._observation_names)
 
         # NOTE: This is order sensitive. Managers must reset after entity data is updated.
-        self.extras["episode"] = dict()
+        self.extras["episode"] = {}
         if len(env_ids) > 0:
             self.extras["episode"]["Episode/length"] = torch.mean(
                 self.episode_length_buf[env_ids].float()

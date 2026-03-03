@@ -48,7 +48,7 @@ class TestCheckTensor:
     def test_original_tensor_not_mutated(self):
         guard = NanGuard(NanGuardCfg(enabled=True, verbose=False, recovery_mode=True, halt_on_nan=False))
         t = torch.tensor([1.0, float("nan"), 3.0])
-        original = t.clone()
+        t.clone()
         guard.check_tensor(t, "test")
         assert torch.isnan(t[1])  # original still has NaN
 
@@ -139,7 +139,6 @@ class TestCheckReward:
         assert not torch.isnan(result).any()
 
     def test_scalar_nan_reward(self):
-        import math
 
         guard = NanGuard(NanGuardCfg(enabled=True, verbose=False, recovery_mode=True, halt_on_nan=False))
         result, had_nan = guard.check_reward(float("nan"))

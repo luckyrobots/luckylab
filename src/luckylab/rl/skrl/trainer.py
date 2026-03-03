@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import torch
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 
 from luckylab.rl.common import make_experiment_name, print_config, wrap_env
@@ -191,6 +190,7 @@ def create_agent(env, cfg: RlRunnerCfg, device: str, experiment_name: str | None
 def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu") -> None:
     """Train an RL agent using skrl."""
     from skrl.trainers.torch import SequentialTrainer
+
     from luckylab.envs import ManagerBasedRlEnv
 
     seed_rng(rl_cfg.seed)
@@ -199,6 +199,16 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu
 
     with WandbLogger(rl_cfg, experiment_name) as wb:
         env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+
+        if rl_cfg.rerun:
+            from luckylab.utils.rerun_logger import RerunLogger
+            env.rerun_logger = RerunLogger(
+                app_id=f"luckylab/{experiment_name}",
+                save_path=rl_cfg.rerun_save_path,
+                log_interval=rl_cfg.rerun_log_interval,
+                env_idx=rl_cfg.rerun_env_idx,
+            )
+
         print_config(env, rl_cfg, experiment_name, device)
         wrapped = _wrap_env(env, rl_cfg)
         agent = create_agent(wrapped, rl_cfg, device, experiment_name)
@@ -223,6 +233,9 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu
             agents=agent,
         )
         trainer.train()
+
+        if env.rerun_logger is not None:
+            env.rerun_logger.close()
         wrapped.close()
 
 

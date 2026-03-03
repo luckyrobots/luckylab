@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import torch
@@ -13,6 +14,8 @@ from luckylab.managers.manager_term_config import RewardTermCfg
 if TYPE_CHECKING:
     from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
 
+logger = logging.getLogger(__name__)
+
 
 class RewardManager(ManagerBase):
     _env: ManagerBasedRlEnv
@@ -20,11 +23,11 @@ class RewardManager(ManagerBase):
     def __init__(self, cfg: dict[str, RewardTermCfg], env: ManagerBasedRlEnv) -> None:
         self._term_names: list[str] = []
         self._term_cfgs: list[RewardTermCfg] = []
-        self._class_term_cfgs: list[RewardTermCfg] = list()
+        self._class_term_cfgs: list[RewardTermCfg] = []
         
         self.cfg = cfg
         super().__init__(env=env)
-        self._episode_sums = dict()
+        self._episode_sums = {}
         for term_name in self._term_names:
             self._episode_sums[term_name] = torch.zeros(
                 self.num_envs, dtype=torch.float, device=self.device
@@ -61,7 +64,7 @@ class RewardManager(ManagerBase):
         if env_ids is None:
             env_ids = slice(None)
         extras = {}
-        for key in self._episode_sums.keys():
+        for key in self._episode_sums:
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
             extras["Episode_Reward/" + key] = (
                 episodic_sum_avg / self._env.max_episode_length_s
@@ -100,7 +103,7 @@ class RewardManager(ManagerBase):
         for term_name, term_cfg in self.cfg.items():
             term_cfg: RewardTermCfg | None
             if term_cfg is None:
-                print(f"term: {term_name} set to None, skipping...")
+                logger.debug("term: %s set to None, skipping", term_name)
                 continue
             self._resolve_common_term_cfg(term_name, term_cfg)
             self._term_names.append(term_name)

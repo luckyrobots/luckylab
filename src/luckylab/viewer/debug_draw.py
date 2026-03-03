@@ -16,8 +16,9 @@ from typing import TYPE_CHECKING
 from luckylab.utils.logging import print_info
 
 if TYPE_CHECKING:
-    from luckylab.envs import ManagerBasedRlEnv
     from luckyrobots import LuckyEngineClient
+
+    from luckylab.envs import ManagerBasedRlEnv
 
 
 class DebugVisualizer:

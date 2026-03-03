@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import torch
 
 from luckylab.managers.scene_entity_config import SceneEntityCfg
-from luckylab.utils.nan_guard import NanGuard
 
 if TYPE_CHECKING:
     from luckylab.entity import Entity

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import torch
 from gymnasium.spaces import Box
@@ -9,6 +11,8 @@ from gymnasium.spaces import Box
 from luckylab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from luckylab.utils.nan_guard import NanGuard
 from luckylab.viewer import DebugVisualizer
+
+logger = logging.getLogger(__name__)
 
 
 class SkrlWrapper:
@@ -143,5 +147,5 @@ class SkrlWrapper:
 
     def close(self) -> None:
         if self.nan_guard.enabled:
-            print(self.nan_guard.get_stats_summary())
+            logger.info(self.nan_guard.get_stats_summary())
         self.env.close()

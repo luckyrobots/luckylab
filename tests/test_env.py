@@ -8,7 +8,7 @@ from luckylab.managers.manager_term_config import (
 )
 from luckylab.tasks.velocity.mdp import (
     bad_orientation,
-    terrain_levels_vel,
+    commands_vel,
     track_linear_velocity,
 )
 
@@ -59,10 +59,10 @@ def test_termination_term_cfg():
 def test_curriculum_term_cfg():
     """Test CurriculumTermCfg configuration."""
     term = CurriculumTermCfg(
-        func=terrain_levels_vel,
+        func=commands_vel,
         params={
-            "command_name": "twist",
+            "velocity_stages": [],
         },
     )
-    assert term.func is terrain_levels_vel
-    assert "command_name" in term.params
+    assert term.func is commands_vel
+    assert "velocity_stages" in term.params

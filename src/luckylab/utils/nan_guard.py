@@ -13,19 +13,19 @@ When NaN is detected, can either:
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import torch
 
-if TYPE_CHECKING:
-    pass
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,7 +44,7 @@ class NanGuardCfg:
         verbose: Print warnings when NaN detected.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     buffer_size: int = 100
     output_dir: str = "/tmp/luckylab/nan_dumps"
     recovery_mode: bool = False
@@ -222,9 +222,9 @@ class NanGuard:
         latest_dump.unlink(missing_ok=True)
         latest_dump.symlink_to(filename.name)
 
-        print(f"[NanGuard] Detected NaN/Inf at step {self.step_counter}")
-        print(f"[NanGuard] Dumped {len(self.buffer)} states to: {filename}")
-        print(f"[NanGuard] Latest dump symlinked at: {latest_dump}")
+        logger.warning("Detected NaN/Inf at step %d", self.step_counter)
+        logger.warning("Dumped %d states to: %s", len(self.buffer), filename)
+        logger.warning("Latest dump symlinked at: %s", latest_dump)
 
     def reset(self) -> None:
         """Reset the guard state (allows dumping again after reset)."""
@@ -273,7 +273,7 @@ class NanGuard:
             else:
                 nan_count = np.sum(np.isnan(tensor))
                 inf_count = np.sum(np.isinf(tensor))
-            print(f"[NanGuard] {name}: {nan_count} NaN, {inf_count} Inf at step {self.step_counter}")
+            logger.warning("%s: %d NaN, %d Inf at step %d", name, nan_count, inf_count, self.step_counter)
 
         if self.cfg.recovery_mode:
             # Replace NaN/Inf with safe values
@@ -383,7 +383,7 @@ class NanGuard:
         self.stats.last_nan_step = self.step_counter
 
         if self.cfg.verbose:
-            print(f"[NanGuard] reward: NaN/Inf at step {self.step_counter}")
+            logger.warning("reward: NaN/Inf at step %d", self.step_counter)
 
         if self.cfg.recovery_mode:
             self.stats.recoveries += 1

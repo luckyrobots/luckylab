@@ -35,10 +35,10 @@ def _build_policy_kwargs(rl_cfg: RlRunnerCfg) -> dict:
     """Map our ActorCriticCfg to SB3 policy_kwargs."""
     policy = rl_cfg.policy
     kwargs: dict = {
-        "net_arch": dict(
-            pi=list(policy.actor_hidden_dims),
-            qf=list(policy.critic_hidden_dims),
-        ),
+        "net_arch": {
+            "pi": list(policy.actor_hidden_dims),
+            "qf": list(policy.critic_hidden_dims),
+        },
         "activation_fn": _ACTIVATIONS.get(policy.activation.lower(), nn.ELU),
     }
     if policy.noise_type == "gsde":
@@ -247,6 +247,16 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu
 
     with WandbLogger(rl_cfg, experiment_name):
         env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+
+        if rl_cfg.rerun:
+            from luckylab.utils.rerun_logger import RerunLogger
+            env.rerun_logger = RerunLogger(
+                app_id=f"luckylab/{experiment_name}",
+                save_path=rl_cfg.rerun_save_path,
+                log_interval=rl_cfg.rerun_log_interval,
+                env_idx=rl_cfg.rerun_env_idx,
+            )
+
         print_config(env, rl_cfg, experiment_name, device)
         wrapped = _wrap_env(env, rl_cfg)
 
@@ -270,6 +280,8 @@ def train(env_cfg: ManagerBasedRlEnvCfg, rl_cfg: RlRunnerCfg, device: str = "cpu
         model.save(str(final_path))
         print_info(f"Saved final model to {final_path}")
 
+        if env.rerun_logger is not None:
+            env.rerun_logger.close()
         wrapped.close()
 
 

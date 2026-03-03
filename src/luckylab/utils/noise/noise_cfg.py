@@ -54,9 +54,12 @@ class UniformNoiseCfg(NoiseCfg):
     n_max: torch.Tensor | float = 1.0
 
     def __post_init__(self):
-        if isinstance(self.n_min, (int, float)) and isinstance(self.n_max, (int, float)):
-            if self.n_min >= self.n_max:
-                raise ValueError(f"n_min ({self.n_min}) must be less than n_max ({self.n_max})")
+        if (
+            isinstance(self.n_min, (int, float))
+            and isinstance(self.n_max, (int, float))
+            and self.n_min >= self.n_max
+        ):
+            raise ValueError(f"n_min ({self.n_min}) must be less than n_max ({self.n_max})")
 
     @override
     def apply(self, data: torch.Tensor) -> torch.Tensor:

@@ -211,3 +211,13 @@ class RlRunnerCfg:
     """W&B project name."""
     wandb_entity: str | None = None
     """W&B entity (team/user name)."""
+
+    # Rerun visualization
+    rerun: bool = False
+    """Enable rerun live visualization."""
+    rerun_log_interval: int = 10
+    """Log to rerun every N environment steps."""
+    rerun_save_path: str | None = None
+    """Save rerun recording to .rrd file instead of spawning viewer."""
+    rerun_env_idx: int = 0
+    """Which environment index to visualize in rerun."""

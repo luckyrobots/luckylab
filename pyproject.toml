@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "luckylab"
 version = "0.1.0"
-description = "RL training environments for LuckyRobots"
+description = "RL and IL training for LuckyRobots"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -28,8 +28,6 @@ dependencies = [
     "numpy>=1.24.0",
     "prettytable>=3.10.0",
     "torch>=2.0.0",
-    "skrl>=1.3.0",
-    "stable-baselines3>=2.0.0",
     "tqdm>=4.64.0",
     "rich>=13.0.0",
     "tensorboard>=2.15.0",
@@ -42,13 +40,23 @@ Homepage = "https://github.com/luckyrobots/luckylab"
 Repository = "https://github.com/luckyrobots/luckylab"
 Issues = "https://github.com/luckyrobots/luckylab/issues"
 
-[project.entry-points."luckylab.tasks"]
-velocity = "luckylab.tasks"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/luckylab"]
 
 [dependency-groups]
+rl = [
+    "skrl>=1.3.0",
+    "stable-baselines3>=2.0.0",
+    {include-group = "viewer"},
+]
+il = [
+    "lerobot>=0.4.3",
+]
+all = [
+    {include-group = "rl"},
+    {include-group = "il"},
+    {include-group = "rerun"},
+]
 dev = [
     "pre-commit>=3.7.0",
     "debugpy>=1.8.1",
@@ -63,20 +71,19 @@ viewer = [
     "trimesh>=4.0.0",
     "pillow>=10.0.0",
 ]
+rerun = [
+    "rerun-sdk>=0.23.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 
-[tool.uv.sources]
-luckyrobots = { path = "../luckyrobots", editable = true }
-
 [tool.ruff]
 line-length = 110
 target-version = "py310"
 exclude = [
-    "example.py",
     ".git",
     ".venv",
     "dist",
@@ -85,3 +92,7 @@ exclude = [
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "N", "B", "C4", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/luckylab/envs/mdp/rewards.py" = ["N801"]
+"src/luckylab/viewer/run_policy.py" = ["N806"]

@@ -17,9 +17,8 @@ from luckylab.managers.manager_term_config import (
     RewardTermCfg,
     TerminationTermCfg,
 )
-from luckylab.managers.scene_entity_config import SceneEntityCfg
-from luckylab.utils.noise import UniformNoiseCfg as Unoise
 from luckylab.tasks.velocity import mdp
+from luckylab.utils.noise import UniformNoiseCfg as Unoise
 
 
 def create_velocity_env_cfg(
@@ -148,9 +147,6 @@ def create_velocity_env_cfg(
         ),
     }
 
-    # Curriculum: forward first, then yaw, then lateral, then full range.
-    # This ordering prevents "turning-as-strafing" — the agent learns strong
-    # angular tracking (cmd_yaw=0) before lateral commands are introduced.
     curriculum: dict[str, CurriculumTermCfg] = {
         "commands_vel": CurriculumTermCfg(
             func=mdp.commands_vel,
@@ -167,13 +163,25 @@ def create_velocity_env_cfg(
                 ],
             },
         ),
+        "cpg_amplitude": CurriculumTermCfg(
+            func=mdp.cpg_amplitude,
+            params={
+                "action_term_name": "joint_pos",
+                "stages": [
+                    {"step": 2_000_000, "blend": 0.75},
+                    {"step": 2_250_000, "blend": 0.50},
+                    {"step": 2_500_000, "blend": 0.25},
+                    {"step": 2_750_000, "blend": 0.0},
+                ],
+            },
+        ),
     }
 
     contract = SimulationContract(
         vel_command_x_range=(-0.5, 0.5),
         vel_command_y_range=(0.0, 0.0),
         vel_command_yaw_range=(0.0, 0.0),
-        vel_command_standing_probability=0.1,
+        vel_command_standing_probability=0.2,
         vel_command_resampling_time_range=(5.0, 10.0),
     )
 

@@ -3,7 +3,6 @@
 import numpy as np
 
 from luckylab.managers import (
-    CurriculumManager,
     NullCurriculumManager,
 )
 from luckylab.managers.manager_term_config import (
@@ -11,8 +10,6 @@ from luckylab.managers.manager_term_config import (
     RewardTermCfg,
     TerminationTermCfg,
 )
-from luckylab.managers.reward_manager import RewardManager
-from luckylab.managers.termination_manager import TerminationManager
 
 
 class TestNullCurriculumManager:

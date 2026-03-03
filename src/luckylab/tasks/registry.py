@@ -3,36 +3,38 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from luckylab.il.config import IlRunnerCfg
     from luckylab.rl.config import RlRunnerCfg
 
-T = TypeVar("T")
-
-# Registry stores (env_cfg, rl_cfgs_dict) pairs
-# rl_cfgs_dict maps algorithm name -> RlRunnerCfg
-# Using Any at runtime to avoid circular import
-EnvRlCfgPair = tuple[type | Callable, dict[str, Any]]
-_REGISTRY: dict[str, EnvRlCfgPair] = {}
+# Registry stores (env_cfg, rl_cfgs_dict, il_cfgs_dict) triples
+# rl_cfgs_dict maps policy name (e.g. "ppo", "sac") -> RlRunnerCfg
+# il_cfgs_dict maps policy name (e.g. "act", "diffusion") -> IlRunnerCfg
+TaskEntry = tuple[type | Callable | None, dict[str, Any], dict[str, Any]]
+_REGISTRY: dict[str, TaskEntry] = {}
 
 
 def register_task(
     task_id: str,
-    env_cfg: type | Callable,
+    env_cfg: type | Callable | None = None,
     rl_cfgs: dict[str, RlRunnerCfg] | None = None,
+    il_cfgs: dict[str, IlRunnerCfg] | None = None,
 ) -> None:
     """
-    Register a task with its environment configuration and RL configs per algorithm.
+    Register a task with its environment configuration and training configs.
 
     Args:
         task_id: Unique identifier for the task (e.g., "go2_velocity_flat")
-        env_cfg: The environment configuration class, instance, or factory function
+        env_cfg: The environment configuration class, instance, or factory function.
+                 Can be None for IL-only tasks that don't need ManagerBasedRlEnvCfg.
         rl_cfgs: Dict mapping algorithm name to RL config (e.g., {"ppo": ..., "sac": ...})
+        il_cfgs: Dict mapping policy type to IL config (e.g., {"act": ..., "diffusion": ...})
     """
     if task_id in _REGISTRY:
         raise ValueError(f"Task '{task_id}' is already registered")
-    _REGISTRY[task_id] = (env_cfg, rl_cfgs or {})
+    _REGISTRY[task_id] = (env_cfg, rl_cfgs or {}, il_cfgs or {})
 
 
 def list_tasks() -> list[str]:
@@ -52,12 +54,16 @@ def load_env_cfg(task_id: str) -> object:
 
     Raises:
         KeyError: If task_id is not registered
+        ValueError: If env_cfg is None (IL-only task with no env config)
     """
     if task_id not in _REGISTRY:
         available = ", ".join(list_tasks()) or "(none)"
         raise KeyError(f"Task '{task_id}' not found. Available tasks: {available}")
 
-    env_cfg, _ = _REGISTRY[task_id]
+    env_cfg = _REGISTRY[task_id][0]
+
+    if env_cfg is None:
+        raise ValueError(f"Task '{task_id}' has no environment config (IL-only task)")
 
     # Support both classes and factory functions (but not @retval decorated ones)
     if isinstance(env_cfg, type) and callable(env_cfg):
@@ -83,16 +89,46 @@ def load_rl_cfg(task_id: str, algorithm: str) -> "RlRunnerCfg | None":
         available = ", ".join(list_tasks()) or "(none)"
         raise KeyError(f"Task '{task_id}' not found. Available tasks: {available}")
 
-    _, rl_cfgs = _REGISTRY[task_id]
+    rl_cfgs = _REGISTRY[task_id][1]
     return rl_cfgs.get(algorithm)
 
 
-def list_algorithms(task_id: str) -> list[str]:
-    """Return available algorithms for a task."""
+def load_il_cfg(task_id: str, policy_type: str) -> "IlRunnerCfg | None":
+    """
+    Load the IL training configuration for a task and policy type.
+
+    Args:
+        task_id: The task identifier
+        policy_type: The policy type (e.g., "act", "diffusion")
+
+    Returns:
+        The IL configuration, or None if not registered for this policy type
+
+    Raises:
+        KeyError: If task_id is not registered
+    """
+    if task_id not in _REGISTRY:
+        available = ", ".join(list_tasks()) or "(none)"
+        raise KeyError(f"Task '{task_id}' not found. Available tasks: {available}")
+
+    il_cfgs = _REGISTRY[task_id][2]
+    return il_cfgs.get(policy_type)
+
+
+def list_rl_policies(task_id: str) -> list[str]:
+    """Return available RL policies for a task."""
     if task_id not in _REGISTRY:
         return []
-    _, rl_cfgs = _REGISTRY[task_id]
+    rl_cfgs = _REGISTRY[task_id][1]
     return sorted(rl_cfgs.keys())
+
+
+def list_il_policies(task_id: str) -> list[str]:
+    """Return available IL policy types for a task."""
+    if task_id not in _REGISTRY:
+        return []
+    il_cfgs = _REGISTRY[task_id][2]
+    return sorted(il_cfgs.keys())
 
 
 def is_registered(task_id: str) -> bool:

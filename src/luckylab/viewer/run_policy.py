@@ -515,10 +515,7 @@ def main():
         def _(event: viser.GuiEvent):
             nonlocal speed_multiplier
             idx = SPEED_STEPS.index(speed_multiplier) if speed_multiplier in SPEED_STEPS else 3
-            if event.target.value == "Slower":
-                idx = max(0, idx - 1)
-            else:
-                idx = min(len(SPEED_STEPS) - 1, idx + 1)
+            idx = max(0, idx - 1) if event.target.value == "Slower" else min(len(SPEED_STEPS) - 1, idx + 1)
             speed_multiplier = SPEED_STEPS[idx]
 
     with server.gui.add_folder("Visualization"):

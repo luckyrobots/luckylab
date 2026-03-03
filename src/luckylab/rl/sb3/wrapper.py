@@ -6,7 +6,7 @@ expected interface (numpy arrays, no batch dim, standard gymnasium API).
 
 from __future__ import annotations
 
-import time
+import logging
 from typing import Any
 
 import gymnasium
@@ -17,6 +17,8 @@ from gymnasium.spaces import Box
 from luckylab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from luckylab.utils.nan_guard import NanGuard
 from luckylab.viewer import DebugVisualizer
+
+logger = logging.getLogger(__name__)
 
 
 class Sb3Wrapper(gymnasium.Env):
@@ -130,9 +132,6 @@ class Sb3Wrapper(gymnasium.Env):
                 "step": self.nan_guard.step_counter,
             }
 
-        # if self.is_realtime and self.visualizer.should_draw():
-        #     self.visualizer.draw_velocity_command()
-
         # Cache episode info for wandb logging before stripping.
         episode = extras.pop("episode", None)
         if episode:
@@ -147,5 +146,5 @@ class Sb3Wrapper(gymnasium.Env):
 
     def close(self) -> None:
         if self.nan_guard.enabled:
-            print(self.nan_guard.get_stats_summary())
+            logger.info(self.nan_guard.get_stats_summary())
         self.env.close()

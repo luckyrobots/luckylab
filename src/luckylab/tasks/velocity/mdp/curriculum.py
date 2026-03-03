@@ -45,3 +45,47 @@ def commands_vel(
         "ang_vel_z_min": torch.tensor(contract.vel_command_yaw_range[0]),
         "ang_vel_z_max": torch.tensor(contract.vel_command_yaw_range[1]),
     }
+
+
+class CpgStage(TypedDict):
+    """CPG amplitude curriculum stage definition."""
+
+    step: int
+    blend: float
+
+
+def cpg_amplitude(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    action_term_name: str,
+    stages: list[CpgStage],
+) -> dict[str, torch.Tensor]:
+    """Step-wise reduction of CPG amplitudes based on training step.
+
+    Each stage sets a blend factor (1.0 = full CPG, 0.0 = no CPG).
+    The policy gets a stable plateau at each level before the next drop.
+
+    The gait phase observations (sin/cos) are still produced even at zero
+    amplitude, so the policy retains the timing signal to coordinate its
+    own gait after the CPG scaffold is removed.
+    """
+    del env_ids
+    step = env.common_step_counter
+    cpg = env.action_manager.get_term(action_term_name)
+
+    # Store original amplitudes on first call
+    if not hasattr(cpg, "_orig_amplitude_hip"):
+        cpg._orig_amplitude_hip = cpg._amplitude_hip
+        cpg._orig_amplitude_thigh = cpg._amplitude_thigh
+        cpg._orig_amplitude_calf = cpg._amplitude_calf
+
+    blend = 1.0
+    for stage in stages:
+        if step > stage["step"]:
+            blend = stage["blend"]
+
+    cpg._amplitude_hip = cpg._orig_amplitude_hip * blend
+    cpg._amplitude_thigh = cpg._orig_amplitude_thigh * blend
+    cpg._amplitude_calf = cpg._orig_amplitude_calf * blend
+
+    return {"cpg_blend": torch.tensor(blend)}

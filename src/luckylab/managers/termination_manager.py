@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Sequence
 
 import torch
@@ -12,6 +13,8 @@ from luckylab.managers.manager_term_config import TerminationTermCfg
 
 if TYPE_CHECKING:
     from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnv
+
+logger = logging.getLogger(__name__)
 
 
 class TerminationManager(ManagerBase):
@@ -25,7 +28,7 @@ class TerminationManager(ManagerBase):
         self.cfg = cfg
         super().__init__(env=env)
 
-        self._term_dones = dict()
+        self._term_dones = {}
         for term_name in self._term_names:
             self._term_dones[term_name] = torch.zeros(
                 self.num_envs, device=self.device, dtype=torch.bool
@@ -75,7 +78,7 @@ class TerminationManager(ManagerBase):
         if env_ids is None:
             env_ids = slice(None)
         extras = {}
-        for key in self._term_dones.keys():
+        for key in self._term_dones:
             extras["Episode_Termination/" + key] = torch.count_nonzero(
                 self._term_dones[key][env_ids]
             ).item()
@@ -102,7 +105,7 @@ class TerminationManager(ManagerBase):
         self, env_idx: int
     ) -> Sequence[tuple[str, Sequence[float]]]:
         terms = []
-        for key in self._term_dones.keys():
+        for key in self._term_dones:
             terms.append((key, [self._term_dones[key][env_idx].float().cpu().item()]))
         return terms
 
@@ -110,7 +113,7 @@ class TerminationManager(ManagerBase):
         for term_name, term_cfg in self.cfg.items():
             term_cfg: TerminationTermCfg | None
             if term_cfg is None:
-                print(f"term: {term_name} set to None, skipping...")
+                logger.debug("term: %s set to None, skipping", term_name)
                 continue
             self._resolve_common_term_cfg(term_name, term_cfg)
             self._term_names.append(term_name)

@@ -275,7 +275,7 @@ class EntityData:
             upper: Upper limits for each joint.
         """
         limits = torch.tensor(
-            [[lo, hi] for lo, hi in zip(lower, upper)],
+            [[lo, hi] for lo, hi in zip(lower, upper, strict=False)],
             device=self.device,
             dtype=torch.float32,
         )

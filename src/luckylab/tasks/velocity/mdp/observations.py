@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import torch
+
 from luckylab.entity import Entity
 from luckylab.envs.mdp.actions.cpg_action import CPGAction
 from luckylab.managers.scene_entity_config import SceneEntityCfg
-
-import torch
 
 if TYPE_CHECKING:
     from luckylab.envs import ManagerBasedRlEnv

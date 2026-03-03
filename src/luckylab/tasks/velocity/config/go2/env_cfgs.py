@@ -6,7 +6,6 @@ from luckylab.envs.manager_based_rl_env import ManagerBasedRlEnvCfg
 from luckylab.tasks.velocity.velocity_env_cfg import create_velocity_env_cfg
 from luckylab.utils.retval import retval
 
-
 GO2_ACTION_SCALE = {
     ".*_hip_joint": 0.3727530387083568,
     ".*_thigh_joint": 0.3727530387083568,
@@ -14,7 +13,7 @@ GO2_ACTION_SCALE = {
 }
 
 @retval
-def UNITREE_GO2_ROUGH_ENV_CFG() -> ManagerBasedRlEnvCfg:
+def UNITREE_GO2_ROUGH_ENV_CFG() -> ManagerBasedRlEnvCfg:  # noqa: N802
     """Create Unitree Go2 rough terrain velocity tracking configuration."""
     cfg = create_velocity_env_cfg(
         robot="unitreego2",
@@ -26,7 +25,7 @@ def UNITREE_GO2_ROUGH_ENV_CFG() -> ManagerBasedRlEnvCfg:
 
 
 @retval
-def UNITREE_GO2_FLAT_ENV_CFG() -> ManagerBasedRlEnvCfg:
+def UNITREE_GO2_FLAT_ENV_CFG() -> ManagerBasedRlEnvCfg:  # noqa: N802
     """Create Unitree Go2 flat terrain velocity tracking configuration."""
     # Start with rough terrain config
     cfg = deepcopy(UNITREE_GO2_ROUGH_ENV_CFG)

@@ -1,5 +1,6 @@
 """Observation manager for computing observations."""
 
+import logging
 from typing import Sequence
 
 import numpy as np
@@ -11,13 +12,15 @@ from luckylab.managers.manager_term_config import ObservationGroupCfg, Observati
 from luckylab.utils.buffers import CircularBuffer, DelayBuffer
 from luckylab.utils.noise import noise_cfg, noise_model
 
+logger = logging.getLogger(__name__)
+
 
 class ObservationManager(ManagerBase):
     def __init__(self, cfg: dict[str, ObservationGroupCfg], env):
         self.cfg = cfg
         super().__init__(env=env)
 
-        self._group_obs_dim: dict[str, tuple[int, ...] | list[tuple[int, ...]]] = dict()
+        self._group_obs_dim: dict[str, tuple[int, ...] | list[tuple[int, ...]]] = {}
 
         for group_name, group_term_dims in self._group_obs_term_dim.items():
             if self._group_obs_concatenate[group_name]:
@@ -144,7 +147,7 @@ class ObservationManager(ManagerBase):
     def compute(
         self, update_history: bool = False
     ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
-        obs_buffer: dict[str, torch.Tensor | dict[str, torch.Tensor]] = dict()
+        obs_buffer: dict[str, torch.Tensor | dict[str, torch.Tensor]] = {}
         for group_name in self._group_obs_term_names:
             obs_buffer[group_name] = self.compute_group(group_name, update_history)
         self._obs_buffer = obs_buffer
@@ -192,28 +195,28 @@ class ObservationManager(ManagerBase):
         return group_obs
 
     def _prepare_terms(self) -> None:
-        self._group_obs_term_names: dict[str, list[str]] = dict()
-        self._group_obs_term_dim: dict[str, list[tuple[int, ...]]] = dict()
-        self._group_obs_term_cfgs: dict[str, list[ObservationTermCfg]] = dict()
-        self._group_obs_class_term_cfgs: dict[str, list[ObservationTermCfg]] = dict()
-        self._group_obs_concatenate: dict[str, bool] = dict()
-        self._group_obs_concatenate_dim: dict[str, int] = dict()
+        self._group_obs_term_names: dict[str, list[str]] = {}
+        self._group_obs_term_dim: dict[str, list[tuple[int, ...]]] = {}
+        self._group_obs_term_cfgs: dict[str, list[ObservationTermCfg]] = {}
+        self._group_obs_class_term_cfgs: dict[str, list[ObservationTermCfg]] = {}
+        self._group_obs_concatenate: dict[str, bool] = {}
+        self._group_obs_concatenate_dim: dict[str, int] = {}
         self._group_obs_class_instances: dict[str, noise_model.NoiseModel] = {}
-        self._group_obs_term_delay_buffer: dict[str, dict[str, DelayBuffer]] = dict()
-        self._group_obs_term_history_buffer: dict[str, dict[str, CircularBuffer]] = dict()
+        self._group_obs_term_delay_buffer: dict[str, dict[str, DelayBuffer]] = {}
+        self._group_obs_term_history_buffer: dict[str, dict[str, CircularBuffer]] = {}
 
         for group_name, group_cfg in self.cfg.items():
             group_cfg: ObservationGroupCfg | None
             if group_cfg is None:
-                print(f"group: {group_name} set to None, skipping...")
+                logger.debug("group: %s set to None, skipping", group_name)
                 continue
 
-            self._group_obs_term_names[group_name] = list()
-            self._group_obs_term_dim[group_name] = list()
-            self._group_obs_term_cfgs[group_name] = list()
-            self._group_obs_class_term_cfgs[group_name] = list()
-            group_entry_delay_buffer: dict[str, DelayBuffer] = dict()
-            group_entry_history_buffer: dict[str, CircularBuffer] = dict()
+            self._group_obs_term_names[group_name] = []
+            self._group_obs_term_dim[group_name] = []
+            self._group_obs_term_cfgs[group_name] = []
+            self._group_obs_class_term_cfgs[group_name] = []
+            group_entry_delay_buffer: dict[str, DelayBuffer] = {}
+            group_entry_history_buffer: dict[str, CircularBuffer] = {}
 
             self._group_obs_concatenate[group_name] = group_cfg.concatenate_terms
             self._group_obs_concatenate_dim[group_name] = (
@@ -225,7 +228,7 @@ class ObservationManager(ManagerBase):
             for term_name, term_cfg in group_cfg.terms.items():
                 term_cfg: ObservationTermCfg | None
                 if term_cfg is None:
-                    print(f"term: {term_name} set to None, skipping...")
+                    logger.debug("term: %s set to None, skipping", term_name)
                     continue
 
                 self._resolve_common_term_cfg(term_name, term_cfg)

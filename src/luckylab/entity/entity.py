@@ -202,7 +202,7 @@ class Entity:
             name_keys = [name_keys]
 
         # Use resolve_matching_names_values with dummy values
-        data = {key: 0 for key in name_keys}
+        data = dict.fromkeys(name_keys, 0)
         try:
             indices, names, _ = resolve_matching_names_values(data, list(joint_subset), preserve_order)
             return indices, names
@@ -231,7 +231,7 @@ class Entity:
         if isinstance(name_keys, str):
             name_keys = [name_keys]
 
-        data = {key: 0 for key in name_keys}
+        data = dict.fromkeys(name_keys, 0)
         try:
             indices, names, _ = resolve_matching_names_values(data, list(actuator_subset), preserve_order)
             return indices, names

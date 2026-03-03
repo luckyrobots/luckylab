@@ -1,7 +1,7 @@
 import math
 from dataclasses import dataclass
 
-from luckylab.envs.mdp.actions import joint_actions, cpg_action
+from luckylab.envs.mdp.actions import cpg_action, joint_actions
 from luckylab.managers.action_manager import ActionTerm
 from luckylab.managers.manager_term_config import ActionTermCfg
 

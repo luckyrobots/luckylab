@@ -135,7 +135,7 @@ class TestGo2RlConfig:
     def test_go2_sac_cfg_values(self):
         cfg = GO2_SAC_CFG
         assert cfg.algorithm == "sac"
-        assert cfg.max_iterations == 1_000_000
+        assert cfg.max_iterations == 4_000_000
         assert cfg.sac.memory_size == 1_000_000
         assert cfg.experiment_name == "go2_velocity_sac"
 
@@ -223,19 +223,19 @@ class TestMdpFunctions:
     def test_reward_functions_importable(self):
         from luckylab.tasks.velocity.mdp import (
             action_rate_l2,
-            body_angular_velocity_penalty,
+            ang_vel_xy_l2,
             joint_pos_limits,
+            posture,
             track_angular_velocity,
             track_linear_velocity,
-            variable_posture,
         )
 
         assert callable(track_linear_velocity)
         assert callable(track_angular_velocity)
-        assert callable(variable_posture)
-        assert callable(body_angular_velocity_penalty)
-        assert callable(joint_pos_limits)
         assert callable(action_rate_l2)
+        assert callable(joint_pos_limits)
+        assert ang_vel_xy_l2 is not None
+        assert posture is not None
 
     def test_termination_functions_importable(self):
         from luckylab.tasks.velocity.mdp import (

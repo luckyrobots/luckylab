@@ -92,7 +92,7 @@ def print_config(
         ot.align["Observation"] = "l"
         ot.align["Dims"] = "r"
         ot.title = f"Observations [{group_name}] ({total})"
-        for name, d in zip(term_names, term_dims):
+        for name, d in zip(term_names, term_dims, strict=False):
             dim = d[0] if isinstance(d, tuple) else d
             ot.add_row([name, dim])
         print_info(ot.get_string())
@@ -104,7 +104,7 @@ def print_config(
     at.align["Action"] = "l"
     at.align["Dims"] = "r"
     at.title = f"Actions ({act_mgr.total_action_dim})"
-    for name, d in zip(act_mgr.active_terms, act_mgr.action_term_dim):
+    for name, d in zip(act_mgr.active_terms, act_mgr.action_term_dim, strict=False):
         at.add_row([name, d])
     print_info(at.get_string())
     print_info("")
@@ -113,7 +113,7 @@ def print_config(
     rew_mgr = env.reward_manager
     active_rewards = [
         (name, cfg.weight)
-        for name, cfg in zip(rew_mgr.active_terms, rew_mgr._term_cfgs)
+        for name, cfg in zip(rew_mgr.active_terms, rew_mgr._term_cfgs, strict=False)
         if cfg.weight != 0.0
     ]
     if active_rewards:

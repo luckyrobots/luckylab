@@ -1,7 +1,10 @@
-"""LuckyLab - RL training framework for LuckyRobots."""
+"""LuckyLab - RL and IL training framework for LuckyRobots."""
 
+import logging
 from importlib.metadata import entry_points
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 LUCKYLAB_SRC_PATH: Path = Path(__file__).parent
 
@@ -18,7 +21,7 @@ def _import_registered_packages() -> None:
         try:
             entry_point.load()
         except Exception as e:
-            print(f"[WARN] Failed to load task package {entry_point.name}: {e}")
+            logger.warning("Failed to load task package %s: %s", entry_point.name, e)
 
 
 _import_registered_packages()

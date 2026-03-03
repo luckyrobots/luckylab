@@ -239,6 +239,7 @@ class WandbLogger:
         if not self.enabled:
             return
         import numpy as np
+
         import wandb
 
         self._agent = agent

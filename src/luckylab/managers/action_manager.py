@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import logging
 from typing import TYPE_CHECKING, Sequence
 
 import torch
@@ -13,6 +14,8 @@ from luckylab.managers.manager_base import ManagerBase, ManagerTermBase
 if TYPE_CHECKING:
     from luckylab.envs import ManagerBasedRlEnv
     from luckylab.managers.manager_term_config import ActionTermCfg
+
+logger = logging.getLogger(__name__)
 
 
 class ActionTerm(ManagerTermBase):
@@ -141,13 +144,13 @@ class ActionManager(ManagerBase):
         return terms
 
     def _prepare_terms(self):
-        self._term_names: list[str] = list()
-        self._terms: dict[str, ActionTerm] = dict()
+        self._term_names: list[str] = []
+        self._terms: dict[str, ActionTerm] = {}
 
         for term_name, term_cfg in self.cfg.items():
             term_cfg: ActionTermCfg | None
             if term_cfg is None:
-                print(f"term: {term_name} set to None, skipping...")
+                logger.debug("term: %s set to None, skipping", term_name)
                 continue
             term = term_cfg.class_type(term_cfg, self._env)
             self._term_names.append(term_name)
