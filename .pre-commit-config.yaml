@@ -1,9 +1,9 @@
 exclude: ^(example.py)
 default_language_version:
-    python: python3.13
+    python: python3.10
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v5.0.0
     hooks:
       - id: check-added-large-files
         args: ['--maxkb=5000']
@@ -12,34 +12,19 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: debug-statements
-
-  - repo: https://github.com/asottile/pyupgrade
-    rev: v3.15.2
-    hooks:
-      - id: pyupgrade
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.8
-    hooks:
-      - id: ruff
-        args: [--fix]
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.8
-    hooks:
-      - id: ruff-format
-        types_or: [python, pyi]
-
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
-    hooks:
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
-  - repo: https://github.com/python-poetry/poetry
-    rev: 1.8.0
+  - repo: https://github.com/asottile/pyupgrade
+    rev: v3.19.1
     hooks:
-      - id: poetry-check
-      - id: poetry-lock
-        args:
-          - "--no-update"
+      - id: pyupgrade
+        args: [--py310-plus]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+        types_or: [python, pyi]

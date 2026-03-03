@@ -1,0 +1,291 @@
+"""Observation manager for computing observations."""
+
+import logging
+from typing import Sequence
+
+import numpy as np
+import torch
+from prettytable import PrettyTable
+
+from luckylab.managers.manager_base import ManagerBase
+from luckylab.managers.manager_term_config import ObservationGroupCfg, ObservationTermCfg
+from luckylab.utils.buffers import CircularBuffer, DelayBuffer
+from luckylab.utils.noise import noise_cfg, noise_model
+
+logger = logging.getLogger(__name__)
+
+
+class ObservationManager(ManagerBase):
+    def __init__(self, cfg: dict[str, ObservationGroupCfg], env):
+        self.cfg = cfg
+        super().__init__(env=env)
+
+        self._group_obs_dim: dict[str, tuple[int, ...] | list[tuple[int, ...]]] = {}
+
+        for group_name, group_term_dims in self._group_obs_term_dim.items():
+            if self._group_obs_concatenate[group_name]:
+                term_dims = torch.stack(
+                    [torch.tensor(dims, device="cpu") for dims in group_term_dims], dim=0
+                )
+                if len(term_dims.shape) > 1:
+                    if self._group_obs_concatenate_dim[group_name] >= 0:
+                        dim = self._group_obs_concatenate_dim[group_name] - 1
+                    else:
+                        dim = self._group_obs_concatenate_dim[group_name]
+                    dim_sum = torch.sum(term_dims[:, dim], dim=0)
+                    term_dims[0, dim] = dim_sum
+                    term_dims = term_dims[0]
+                else:
+                    # 1D case (scalar observations): just sum
+                    term_dims = torch.sum(term_dims, dim=0, keepdim=True)
+                self._group_obs_dim[group_name] = tuple(term_dims.tolist())
+            else:
+                # Non-concatenated: keep list of individual term dimensions
+                self._group_obs_dim[group_name] = group_term_dims
+
+        self._obs_buffer: dict[str, torch.Tensor | dict[str, torch.Tensor]] | None = None
+
+    def __str__(self) -> str:
+        msg = f"<ObservationManager> contains {len(self._group_obs_term_names)} groups.\n"
+        for group_name, group_dim in self._group_obs_dim.items():
+            table = PrettyTable()
+            table.title = f"Active Observation Terms in Group: '{group_name}'"
+            if self._group_obs_concatenate[group_name]:
+                table.title += f" (shape: {group_dim})"  # type: ignore
+            table.field_names = ["Index", "Name", "Shape"]
+            table.align["Name"] = "l"
+            obs_terms = zip(
+                self._group_obs_term_names[group_name],
+                self._group_obs_term_dim[group_name],
+                self._group_obs_term_cfgs[group_name],
+                strict=False,
+            )
+            for index, (name, dims, term_cfg) in enumerate(obs_terms):
+                if term_cfg.history_length > 0 and term_cfg.flatten_history_dim:
+                    # Flattened history: show (9,) ← 3×(3,)
+                    original_size = int(np.prod(dims)) // term_cfg.history_length
+                    original_shape = (original_size,) if len(dims) == 1 else dims[1:]
+                    shape_str = f"{dims}  ← {term_cfg.history_length}×{original_shape}"
+                else:
+                    shape_str = str(tuple(dims))
+                table.add_row([index, name, shape_str])
+            msg += table.get_string()
+            msg += "\n"
+        return msg
+
+    def get_active_iterable_terms(
+        self, env_idx: int
+    ) -> Sequence[tuple[str, Sequence[float]]]:
+        terms = []
+
+        if self._obs_buffer is None:
+            self.compute()
+        assert self._obs_buffer is not None
+        obs_buffer: dict[str, torch.Tensor | dict[str, torch.Tensor]] = self._obs_buffer
+
+        for group_name, _ in self.group_obs_dim.items():
+            if not self.group_obs_concatenate[group_name]:
+                buffers = obs_buffer[group_name]
+                assert isinstance(buffers, dict)
+                for name, term in buffers.items():
+                    terms.append((group_name + "-" + name, term[env_idx].cpu().tolist()))  # type: ignore[unsupported-operator]
+                continue
+
+            idx = 0
+            data = obs_buffer[group_name]
+            assert isinstance(data, torch.Tensor)
+            for name, shape in zip(
+                self._group_obs_term_names[group_name],
+                self._group_obs_term_dim[group_name],
+                strict=False,
+            ):
+                data_length = np.prod(shape)
+                term = data[env_idx, idx : idx + data_length]
+                terms.append((group_name + "-" + name, term.cpu().tolist()))
+                idx += data_length
+
+        return terms
+    
+    # Properties.
+
+    @property
+    def active_terms(self) -> dict[str, list[str]]:
+        return self._group_obs_term_names
+
+    @property
+    def group_obs_dim(self) -> dict[str, tuple[int, ...] | list[tuple[int, ...]]]:
+        return self._group_obs_dim
+
+    @property
+    def group_obs_term_dim(self) -> dict[str, list[tuple[int, ...]]]:
+        return self._group_obs_term_dim
+
+    @property
+    def group_obs_concatenate(self) -> dict[str, bool]:
+        return self._group_obs_concatenate
+
+    # Methods.
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> dict[str, float]:
+        for group_name, group_cfg in self._group_obs_class_term_cfgs.items():
+            for term_cfg in group_cfg:
+                term_cfg.func.reset(env_ids=env_ids)
+            for term_name in self._group_obs_term_names[group_name]:
+                batch_ids = None if isinstance(env_ids, slice) else env_ids
+                if term_name in self._group_obs_term_delay_buffer[group_name]:
+                    self._group_obs_term_delay_buffer[group_name][term_name].reset(
+                        batch_ids=batch_ids
+                    )
+                if term_name in self._group_obs_term_history_buffer[group_name]:
+                    self._group_obs_term_history_buffer[group_name][term_name].reset(
+                        batch_ids=batch_ids
+                    )
+        for mod in self._group_obs_class_instances.values():
+            mod.reset(env_ids=env_ids)
+        return {}
+    
+    def compute(
+        self, update_history: bool = False
+    ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+        obs_buffer: dict[str, torch.Tensor | dict[str, torch.Tensor]] = {}
+        for group_name in self._group_obs_term_names:
+            obs_buffer[group_name] = self.compute_group(group_name, update_history)
+        self._obs_buffer = obs_buffer
+        return obs_buffer
+    
+    def compute_group(
+        self, group_name: str, update_history: bool = False
+    ) -> torch.Tensor | dict[str, torch.Tensor]:
+        group_term_names = self._group_obs_term_names[group_name]
+        group_obs: dict[str, torch.Tensor] = {}
+        obs_terms = zip(
+            group_term_names, self._group_obs_term_cfgs[group_name], strict=False
+        )
+        for term_name, term_cfg in obs_terms:
+            obs: torch.Tensor = term_cfg.func(self._env, **term_cfg.params).clone()
+            if isinstance(term_cfg.noise, noise_cfg.NoiseCfg):
+                obs = term_cfg.noise.apply(obs)
+            elif isinstance(term_cfg.noise, noise_cfg.NoiseModelCfg):
+                obs = self._group_obs_class_instances[term_name](obs)
+            if term_cfg.clip:
+                obs = obs.clip_(min=term_cfg.clip[0], max=term_cfg.clip[1])
+            if term_cfg.scale is not None:
+                scale = term_cfg.scale
+                assert isinstance(scale, torch.Tensor)
+                obs = obs.mul_(scale)
+            if term_cfg.delay_max_lag > 0:
+                delay_buffer = self._group_obs_term_delay_buffer[group_name][term_name]
+                delay_buffer.append(obs)
+                obs = delay_buffer.compute()
+            if term_cfg.history_length > 0:
+                circular_buffer = self._group_obs_term_history_buffer[group_name][term_name]
+                if update_history or not circular_buffer.is_initialized:
+                    circular_buffer.append(obs)
+
+                if term_cfg.flatten_history_dim:
+                    group_obs[term_name] = circular_buffer.buffer.reshape(self._env.num_envs, -1)
+                else:
+                    group_obs[term_name] = circular_buffer.buffer
+            else:
+                group_obs[term_name] = obs
+        if self._group_obs_concatenate[group_name]:
+            return torch.cat(
+                list(group_obs.values()), dim=self._group_obs_concatenate_dim[group_name]
+            )
+        return group_obs
+
+    def _prepare_terms(self) -> None:
+        self._group_obs_term_names: dict[str, list[str]] = {}
+        self._group_obs_term_dim: dict[str, list[tuple[int, ...]]] = {}
+        self._group_obs_term_cfgs: dict[str, list[ObservationTermCfg]] = {}
+        self._group_obs_class_term_cfgs: dict[str, list[ObservationTermCfg]] = {}
+        self._group_obs_concatenate: dict[str, bool] = {}
+        self._group_obs_concatenate_dim: dict[str, int] = {}
+        self._group_obs_class_instances: dict[str, noise_model.NoiseModel] = {}
+        self._group_obs_term_delay_buffer: dict[str, dict[str, DelayBuffer]] = {}
+        self._group_obs_term_history_buffer: dict[str, dict[str, CircularBuffer]] = {}
+
+        for group_name, group_cfg in self.cfg.items():
+            group_cfg: ObservationGroupCfg | None
+            if group_cfg is None:
+                logger.debug("group: %s set to None, skipping", group_name)
+                continue
+
+            self._group_obs_term_names[group_name] = []
+            self._group_obs_term_dim[group_name] = []
+            self._group_obs_term_cfgs[group_name] = []
+            self._group_obs_class_term_cfgs[group_name] = []
+            group_entry_delay_buffer: dict[str, DelayBuffer] = {}
+            group_entry_history_buffer: dict[str, CircularBuffer] = {}
+
+            self._group_obs_concatenate[group_name] = group_cfg.concatenate_terms
+            self._group_obs_concatenate_dim[group_name] = (
+                group_cfg.concatenate_dim + 1
+                if group_cfg.concatenate_dim >= 0
+                else group_cfg.concatenate_dim
+            )
+
+            for term_name, term_cfg in group_cfg.terms.items():
+                term_cfg: ObservationTermCfg | None
+                if term_cfg is None:
+                    logger.debug("term: %s set to None, skipping", term_name)
+                    continue
+
+                self._resolve_common_term_cfg(term_name, term_cfg)
+
+                if not group_cfg.enable_corruption:
+                    term_cfg.noise = None
+                if group_cfg.history_length is not None:
+                    term_cfg.history_length = group_cfg.history_length
+                    term_cfg.flatten_history_dim = group_cfg.flatten_history_dim
+                self._group_obs_term_names[group_name].append(term_name)
+                self._group_obs_term_cfgs[group_name].append(term_cfg)
+                if hasattr(term_cfg.func, "reset") and callable(term_cfg.func.reset):
+                    self._group_obs_class_term_cfgs[group_name].append(term_cfg)
+
+                obs_dims = tuple(term_cfg.func(self._env, **term_cfg.params).shape)
+
+                if term_cfg.scale is not None:
+                    term_cfg.scale = torch.tensor(
+                        term_cfg.scale, dtype=torch.float, device=self._env.device
+                    )
+
+                if term_cfg.noise is not None and isinstance(
+                    term_cfg.noise, noise_cfg.NoiseModelCfg
+                ):
+                    noise_model_cls = term_cfg.noise.class_type
+                    assert issubclass(noise_model_cls, noise_model.NoiseModel), (
+                        f"Class type for observation term '{term_name}' NoiseModelCfg"
+                        f" is not a subclass of 'NoiseModel'. Received: '{type(noise_model_cls)}'."
+                    )
+                    self._group_obs_class_instances[term_name] = noise_model_cls(
+                        term_cfg.noise, num_envs=self._env.num_envs, device=self._env.device
+                    )
+
+                if term_cfg.delay_max_lag > 0:
+                    group_entry_delay_buffer[term_name] = DelayBuffer(
+                        min_lag=term_cfg.delay_min_lag,
+                        max_lag=term_cfg.delay_max_lag,
+                        batch_size=self._env.num_envs,
+                        device=self._env.device,
+                        per_env=term_cfg.delay_per_env,
+                        hold_prob=term_cfg.delay_hold_prob,
+                        update_period=term_cfg.delay_update_period,
+                        per_env_phase=term_cfg.delay_per_env_phase,
+                    )
+
+                if term_cfg.history_length > 0:
+                    group_entry_history_buffer[term_name] = CircularBuffer(
+                        max_len=term_cfg.history_length,
+                        batch_size=self._env.num_envs,
+                        device=self._env.device,
+                    )
+                    old_dims = list(obs_dims)
+                    old_dims.insert(1, term_cfg.history_length)
+                    obs_dims = tuple(old_dims)
+                    if term_cfg.flatten_history_dim:
+                        obs_dims = (obs_dims[0], int(np.prod(obs_dims[1:])))
+
+                self._group_obs_term_dim[group_name].append(obs_dims[1:])
+            self._group_obs_term_delay_buffer[group_name] = group_entry_delay_buffer
+            self._group_obs_term_history_buffer[group_name] = group_entry_history_buffer

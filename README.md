@@ -1,204 +1,278 @@
-# gym-luckyworld
+<p align="center">
+  <h1 align="center">LuckyLab</h1>
+  <p align="center">
+    <strong>A unified robot learning framework powered by <a href="https://github.com/luckyrobots/luckyrobots">LuckyEngine</a></strong>
+  </p>
+  <p align="center">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
+    <a href="https://docs.astral.sh/ruff/"><img src="https://img.shields.io/badge/code%20style-ruff-000000.svg" alt="Ruff"></a>
+  </p>
+</p>
 
-A gym environment for the Lucky World simulator
+LuckyLab is a modular, config-driven framework that brings reinforcement learning, imitation learning, and real-time visualization together in one place. It communicates with LuckyEngine through [luckyrobots](https://github.com/luckyrobots/luckyrobots) and runs on both CPU and GPU.
 
-<img src="https://github.com/luckyrobots/gym-luckyworld/blob/main/assets/gif_luckyrobot.gif" width="50%" alt="ACT policy on ALOHA env"/>
+The framework ships with locomotion and manipulation tasks but is easily extensible to any robot or task. It supports all imitation learning algorithms in [LeRobot](https://github.com/huggingface/lerobot) and multiple RL algorithms via [skrl](https://github.com/Toni-SM/skrl) and [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3). Live inspection is available through [Rerun](https://rerun.io) and [Viser](https://github.com/nerfstudio-project/viser).
+
+| Robot | Task | Learning |
+|-------|------|----------|
+| Unitree Go2 | Velocity tracking | RL (PPO, SAC, TD3, DDPG) |
+| Piper | Pick-and-place | IL (via LeRobot) |
+
+---
+
+## Requirements
+
+- Python 3.10+
+- [LuckyEngine](https://luckyrobots.com) executable
+- [luckyrobots](https://github.com/luckyrobots/luckyrobots) >= 0.1.81
+- PyTorch >= 2.0
 
 ## Installation
 
-Create a virtual environment with Python 3.13 and activate it, e.g. with [`miniconda`](https://docs.anaconda.com/free/miniconda/index.html):
+```bash
+git clone https://github.com/luckyrobots/luckylab.git
+cd luckylab
+
+# Core + RL
+uv sync --group rl
+
+# Core + IL (LeRobot)
+uv sync --group il
+
+# Everything (RL + IL + Rerun + dev tools)
+uv sync --all-groups
+```
+
+---
+
+## Quick Start
+
+### Train
 
 ```bash
-conda create -y -n luckyworld python=3.13 && conda activate luckyworld
+# RL — train SAC on the Go2
+python -m luckylab.scripts.train go2_velocity_flat \
+    --agent.algorithm sac --agent.backend skrl --device cuda
+
+# IL — train ACT on a local dataset
+python -m luckylab.scripts.train piper_pickandplace \
+    --il.policy act --il.dataset-repo-id piper/pickandplace --device cuda
 ```
 
-Install gym-luckyworld:
+### Evaluate
 
 ```bash
-pip install gym-luckyworld
+# RL — with keyboard control
+python -m luckylab.scripts.play go2_velocity_flat \
+    --algorithm sac --checkpoint runs/go2_velocity_sac/checkpoints/best_agent.pt \
+    --keyboard
+
+# IL
+python -m luckylab.scripts.play piper_pickandplace \
+    --policy act --checkpoint runs/luckylab_il/final
 ```
 
-## Quickstart
+Keyboard controls: **W/S** forward/back, **A/D** strafe, **Q/E** turn, **Space** zero, **Esc** quit.
 
-```python
-import imageio
-import numpy as np
-import gymnasium as gym
-import gym_luckyworld # noqa: F401
+### Visualize
 
-env = gym.make("gym_luckyworld/LuckyWorld-PickandPlace-v0")
+```bash
+# Browse a dataset in Rerun (opens in browser)
+python -m luckylab.scripts.visualize_dataset \
+    --repo-id piper/pickandplace --episode-index 0 --web
 
-observation, info = env.reset()
-frames = []
-
-for _ in range(1000):
-    action = env.action_space.sample()
-    observation, reward, terminated, truncated, info = env.step(action)
-    image = env.render()
-    if env.render_mode == "rgb_array":
-        frames.append(image)
-
-    if terminated or truncated:
-        observation, info = env.reset()
-
-env.close()
-
-if env.render_mode == "rgb_array":
-    imageio.mimsave("example.mp4", np.stack(frames), fps=10)
+# List all registered tasks
+python -m luckylab.scripts.list_envs
 ```
 
-## Description
+---
 
-LuckyWorld environment for imitation learning with robotic manipulation tasks.
+## Reinforcement Learning
 
-Two tasks are available:
+Four algorithms across two backends, all configurable via CLI or Python:
 
-- **PickandPlace**: The SO100 robot arm needs to pick up objects and place them at target locations.
-- **Navigation**: Robot navigation tasks for mobile platforms.
+| Algorithm | Type | Backends |
+|-----------|------|----------|
+| **PPO** | On-policy | skrl, sb3 |
+| **SAC** | Off-policy | skrl, sb3 |
+| **TD3** | Off-policy | skrl, sb3 |
+| **DDPG** | Off-policy | skrl, sb3 |
 
-### Robots
-
-- **SO100**: 6-DOF robotic arm with the following actuators:
-  - `shoulder_pan`: Shoulder rotation (-2.2 to 2.2 rad)
-  - `shoulder_lift`: Shoulder elevation (-3.14 to 0.2 rad)
-  - `elbow_flex`: Elbow joint (0.0 to 3.14 rad)
-  - `wrist_flex`: Wrist flexion (-2.0 to 1.8 rad)
-  - `wrist_roll`: Wrist rotation (-3.14 to 3.14 rad)
-  - `gripper`: Gripper position (-0.2 to 2.0)
-
-### Action Space
-
-The action space consists of continuous values for the robot's joint positions, resulting in a 6-dimensional vector for SO100:
-
-- Six values for the arm's joint positions (absolute values within joint limits).
-
-### Observation Space
-
-Observations are provided as a dictionary with the following keys:
-
-- `agent_pos`: Current joint positions of the robot arm (6D vector for SO100).
-- `pixels`: RGB camera feed (480x640x3) from the robot's perspective.
-
-### Rewards
-
-**Important**: This environment is designed for **imitation learning**. All rewards are set to `0.0` by default.
-
-For reinforcement learning applications, you must implement custom reward functions by:
-1. Subclassing the task classes (`PickandPlace`, `Navigation`)
-2. Overriding the `get_reward()` method with your domain-specific reward logic
-
-### Termination Criteria
-
-Episodes terminate based on task-specific conditions:
-
-- **PickandPlace**:
-  - Success: Object is placed at target location
-  - Failure: Object is dropped away from target
-- **Navigation**:
-  - Success: Robot reaches target location
-  - Failure: Robot collides with obstacles
-
-### Starting State
-
-The robot and environment objects start at randomized positions within predefined bounds.
-
-### Arguments
-
-```python
->>> import gymnasium as gym
->>> import gym_luckyworld
->>> env = gym.make("gym_luckyworld/LuckyWorld-PickandPlace-v0", obs_type="pixels_agent_pos", render_mode="rgb_array")
->>> env
-<TimeLimit<OrderEnforcing<PassiveEnvChecker<LuckyWorldEnv<gym_luckyworld/LuckyWorld-PickandPlace-v0>>>>>
+```bash
+python -m luckylab.scripts.train go2_velocity_flat \
+    --agent.algorithm sac --agent.backend skrl \
+    --agent.max-iterations 5000 \
+    --env.num-envs 4096 \
+    --device cuda
 ```
 
-* `obs_type`: (str) The observation type. Currently supports `pixels_agent_pos` (camera + joint positions). Default is `pixels_agent_pos`.
-* `render_mode`: (str) The rendering mode. Can be `human` (OpenCV windows) or `rgb_array` (numpy arrays). Default is `human`.
-* `scene`: (str) The scene to load. Default is `kitchen`.
-* `robot`: (str) The robot type. Currently supports `so100`. Default is `so100`.
-* `timeout`: (float) Maximum episode duration in seconds. Default is `30.0`.
+```python
+from luckylab.rl import train, RlRunnerCfg
+from luckylab.tasks import load_env_cfg
 
-### Example Usage for Imitation Learning
+env_cfg = load_env_cfg("go2_velocity_flat")
+rl_cfg = RlRunnerCfg(algorithm="sac", backend="skrl", max_iterations=5000)
+train(env_cfg=env_cfg, rl_cfg=rl_cfg, device="cuda")
+```
+
+> **Note:** LuckyEngine does not currently support environment parallelization, so on-policy algorithms like PPO that depend on large batch collection are not recommended. Off-policy algorithms like SAC are the best fit for now. Parallelization support is actively being worked on.
+
+> **Backend recommendation:** Stable Baselines3 is not designed for GPU training. If you want to train on GPU, use the skrl backend (`--agent.backend skrl`).
+
+---
+
+## Imitation Learning
+
+LuckyLab integrates with [LeRobot](https://github.com/huggingface/lerobot) for imitation learning. ACT and Diffusion Policy are ready to use out of the box. Other LeRobot policies (Pi0, SmolVLA, etc.) are supported but require registering a task config for them first, similar to how the ACT and Diffusion configs are set up.
+
+```bash
+python -m luckylab.scripts.train piper_pickandplace \
+    --il.policy act \
+    --il.dataset-repo-id piper/pickandplace \
+    --il.batch-size 8 \
+    --il.num-train-steps 100000 \
+    --device cuda
+```
+
+Datasets are loaded from the [HuggingFace Hub](https://huggingface.co/datasets) or from a local directory at `~/.luckyrobots/data/` (configurable via `LUCKYROBOTS_DATA_HOME`).
+
+---
+
+## Tasks
+
+Tasks bundle an environment config with RL and/or IL configs. The registry makes it easy to add new ones:
 
 ```python
-import gymnasium as gym
-import gym_luckyworld
+from luckylab.tasks import register_task
+from luckylab.envs import ManagerBasedRlEnvCfg
+from luckylab.rl import RlRunnerCfg
 
-# Create environment
-env = gym.make(
-    "gym_luckyworld/LuckyWorld-PickandPlace-v0",
-    obs_type="pixels_agent_pos",
-    render_mode="rgb_array"
+env_cfg = ManagerBasedRlEnvCfg(
+    decimation=4,
+    robot="unitreego2",
+    scene="velocity",
+    observations={...},
+    actions={...},
+    rewards={...},
+    terminations={...},
 )
 
-# Collect demonstration data
-observations = []
-actions = []
-
-obs, info = env.reset()
-for step in range(100):
-    # Your demonstration policy here
-    action = your_policy(obs)
-
-    observations.append(obs)
-    actions.append(action)
-
-    obs, reward, terminated, truncated, info = env.step(action)
-
-    if terminated or truncated:
-        obs, info = env.reset()
-
-env.close()
-
-# Use observations and actions for imitation learning
-# (e.g., with ACT, BC, IQL, etc.)
+register_task(
+    "my_task",
+    env_cfg,
+    rl_cfgs={"ppo": RlRunnerCfg(algorithm="ppo", max_iterations=3000)},
+)
 ```
 
-### Custom Rewards for RL
+---
 
-If you want to use this environment for reinforcement learning, implement custom rewards:
+## Architecture
+
+LuckyLab uses a manager-based environment where each MDP component is handled by a dedicated manager, configured with direct function references:
+
+```
+ManagerBasedRlEnv
+├── ObservationManager   Observation groups with noise, delay, and history
+├── ActionManager        Action scaling, offset, and joint commands
+├── RewardManager        Weighted sum of reward terms
+├── TerminationManager   Episode termination conditions
+└── CurriculumManager    Progressive difficulty adjustment
+```
 
 ```python
-from gym_luckyworld.task import PickandPlace
+from luckylab.managers import RewardTermCfg, TerminationTermCfg
+from luckylab.tasks.velocity import mdp
 
-class RewardedPickandPlace(PickandPlace):
-    def get_reward(self, observation, info):
-        # Implement your reward logic here
-        object_distance = info.get("object_distance_from_target", float('inf'))
-        reward = -object_distance  # Negative distance as reward
+rewards = {
+    "track_velocity": RewardTermCfg(func=mdp.track_linear_velocity, weight=2.0, params={"std": 0.5}),
+    "action_rate": RewardTermCfg(func=mdp.action_rate_l2, weight=-0.1),
+}
 
-        # Add success bonus
-        if object_distance < self.distance_threshold:
-            reward += 100.0
-
-        return reward
-
-# Use your custom task
-env = gym.make("gym_luckyworld/LuckyWorld-PickandPlace-v0")
-env.task = RewardedPickandPlace("kitchen", "pickandplace", "so100", "human")
+terminations = {
+    "time_out": TerminationTermCfg(func=mdp.time_out, time_out=True),
+    "fell_over": TerminationTermCfg(func=mdp.bad_orientation, params={"limit_angle": 1.2}),
+}
 ```
 
-## Contribute
+---
 
-Instead of using `pip` directly, we use `poetry` for development purposes to easily track our dependencies.
-If you don't have it already, follow the [instructions](https://python-poetry.org/docs/#installation) to install it.
+## Visualization & Logging
 
-Install the project with dev dependencies:
+**Policy Viewer** — a web-based MuJoCo viewer powered by [Viser](https://github.com/nerfstudio-project/viser) for inspecting trained RL policies. Renders the robot in a browser with velocity command sliders, pause/play, speed control, and keyboard input — no LuckyEngine connection required.
 
 ```bash
-poetry install --all-extras
+# Open http://localhost:8080 after starting
+python -m luckylab.viewer.run_policy runs/go2_velocity_sac/checkpoints/best_agent.pt
 ```
 
-### Follow our style
+**Rerun** — live step-by-step inspection of observations, actions, rewards, and camera feeds. No LuckyEngine connection required.
 
 ```bash
-# install pre-commit hooks
-pre-commit install
+# Dataset viewer
+python -m luckylab.scripts.visualize_dataset --repo-id piper/pickandplace --web
 
-# apply style and linter checks on staged files
-pre-commit
+# Attach to evaluation
+python -m luckylab.scripts.play go2_velocity_flat --algorithm sac --checkpoint best_agent.pt --rerun
 ```
 
-## Acknowledgment
+**Weights & Biases** — enabled by default for both RL and IL. Disable with `--agent.wandb false` or `--il.wandb false`.
 
-gym-luckyworld is adapted from [gym-aloha](https://github.com/huggingface/gym-aloha/tree/main) and built on top of the [LuckyRobots](https://github.com/luckyrobots/luckyrobots) simulation platform.
+---
+
+## Project Structure
+
+```
+src/luckylab/
+├── configs/          Simulation contract and shared configs
+├── entity/           Robot entity and observation data
+├── envs/             ManagerBasedRlEnv and MDP functions
+│   └── mdp/          Observations, actions, rewards, terminations, curriculum
+├── il/               Imitation learning
+│   └── lerobot/      LeRobot integration (trainer, wrapper)
+├── managers/         Observation, action, reward, termination, curriculum managers
+├── rl/               Reinforcement learning
+│   ├── skrl/         skrl backend
+│   ├── sb3/          Stable Baselines3 backend
+│   ├── config.py     RlRunnerCfg and algorithm configs
+│   └── common.py     Shared utilities
+├── scene/            Scene management
+├── scripts/          CLI entry points (train, play, list_envs, visualize_dataset)
+├── tasks/            Task definitions and registry
+│   ├── velocity/     Locomotion velocity tracking
+│   └── pickandplace/ Manipulation (IL)
+├── utils/            NaN guard, noise models, rerun logger, keyboard, buffers
+└── viewer/           Debug visualization with Viser
+```
+
+---
+
+## Development
+
+```bash
+uv sync --all-groups
+uv run pre-commit install
+
+# Tests
+uv run pytest tests -v
+
+# Lint
+uv run ruff check src tests
+uv run ruff format src tests
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+---
+
+## Acknowledgments
+
+LuckyLab is inspired by:
+- [MJLab](https://github.com/google-deepmind/mujoco_playground) — manager-based, config-driven environment architecture
+- [LeRobot](https://github.com/huggingface/lerobot) — imitation learning policies and dataset format
+
+Built on top of [skrl](https://github.com/Toni-SM/skrl) and [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3) for RL training.
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
