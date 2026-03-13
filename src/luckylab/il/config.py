@@ -71,8 +71,14 @@ class IlRunnerCfg:
     robot: str = ""
     """Robot type for evaluation."""
     host: str = "localhost"
-    """LuckyEngine host for eval connection."""
-    port: int = 8080
-    """LuckyEngine port for eval connection."""
+    """LuckyEngine gRPC host."""
+    port: int = 50051
+    """LuckyEngine gRPC port."""
+    timeout_s: float = 120.0
+    """Connection timeout in seconds."""
+    step_timeout_s: float = 30.0
+    """Per-step physics timeout in seconds."""
+    skip_launch: bool = True
+    """Skip launching engine (connect to existing)."""
     simulation_mode: str = "realtime"
-    """Simulation mode for evaluation (realtime or headless)."""
+    """Simulation timing mode. IL inference always uses 'realtime'."""

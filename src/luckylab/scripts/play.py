@@ -238,14 +238,33 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
         print_info(f"Checkpoint not found: {cfg.checkpoint}", color="red")
         return 1
 
+    # Extract obs/action dims and camera names from the policy's input/output features.
+    obs_dim = 0
+    action_dim = 0
+    camera_names = []
+    camera_shape = (3, 256, 256)
+    if hasattr(policy.config, "input_features"):
+        for key, feat in policy.config.input_features.items():
+            if key == "observation.state":
+                obs_dim = feat.shape[0]
+            elif key.startswith("observation.images."):
+                cam_name = key.split("observation.images.", 1)[1]
+                camera_names.append(cam_name)
+                camera_shape = tuple(feat.shape)
+                print_info(f"  Camera: {cam_name} ({camera_shape})")
+    if hasattr(policy.config, "output_features"):
+        for key, feat in policy.config.output_features.items():
+            if key == "action":
+                action_dim = feat.shape[0]
+
     # Connect to LuckyEngine for eval
-    print_info(f"Connecting to LuckyEngine ({il_cfg.host}:{il_cfg.port})...")
     env = make_lerobot_env(
-        host=il_cfg.host,
-        port=il_cfg.port,
-        scene=il_cfg.scene,
-        robot=il_cfg.robot,
-        simulation_mode=il_cfg.simulation_mode,
+        il_cfg,
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        camera_names=camera_names if camera_names else None,
+        camera_width=camera_shape[-1],
+        camera_height=camera_shape[-2],
     )
 
     # Run evaluation
