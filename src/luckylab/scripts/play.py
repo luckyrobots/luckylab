@@ -24,6 +24,14 @@ import tyro
 from luckylab.utils.logging import print_header, print_info
 
 
+def _resolve_device(device: str) -> str:
+    """Resolve 'auto' to 'cuda' if available, else 'cpu'."""
+    if device != "auto":
+        return device
+    import torch
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 @dataclass(frozen=True)
 class PlayRlConfig:
     """RL inference/evaluation configuration."""
@@ -32,8 +40,8 @@ class PlayRlConfig:
     """Path to the checkpoint file."""
     algorithm: str
     """RL algorithm used for training (ppo, sac, td3, ddpg)."""
-    device: str = "cpu"
-    """Device to run inference on."""
+    device: str = "auto"
+    """Device to run inference on (auto = cuda if available, else cpu)."""
     episodes: int = 10
     """Number of evaluation episodes."""
     keyboard: bool = False
@@ -52,10 +60,12 @@ class PlayIlConfig:
     """Path to the checkpoint directory (contains config.json + model.safetensors)."""
     policy: str = "act"
     """IL policy type (act, diffusion)."""
-    device: str = "cpu"
-    """Device to run inference on."""
+    device: str = "auto"
+    """Device to run inference on (auto = cuda if available, else cpu)."""
     episodes: int = 10
     """Number of evaluation episodes."""
+    max_episode_steps: int = 1000
+    """Maximum steps per episode before auto-reset."""
     rerun: bool = False
     """Enable rerun live visualization."""
     rerun_save_path: str | None = None
@@ -67,7 +77,8 @@ def run_play_rl(task: str, cfg: PlayRlConfig) -> int:
     from luckylab.rl import RlRunnerCfg, load_agent
     from luckylab.tasks import load_env_cfg, load_rl_cfg
 
-    print_info(f"Loading task: {task}")
+    device = _resolve_device(cfg.device)
+    print_info(f"Loading task: {task} (device={device})")
     try:
         env_cfg = load_env_cfg(task)
     except KeyError as e:
@@ -90,7 +101,7 @@ def run_play_rl(task: str, cfg: PlayRlConfig) -> int:
             checkpoint_path=cfg.checkpoint,
             env_cfg=env_cfg,
             rl_cfg=rl_cfg,
-            device=cfg.device,
+            device=device,
         )
     except FileNotFoundError:
         print_info(f"Checkpoint not found: {cfg.checkpoint}", color="red")
@@ -215,16 +226,27 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
     import torch
 
     from luckylab.il import IlRunnerCfg, load_policy
-    from luckylab.il.lerobot.wrapper import make_lerobot_env
+    from luckylab.il.lerobot.wrapper import LeRobotEnvWrapper
     from luckylab.tasks import load_il_cfg
-
-    print_info(f"Loading task: {task} (IL mode)")
+    from luckyrobots import Session
 
     # Get IL config for eval connection info
     il_cfg = load_il_cfg(task, cfg.policy)
     if il_cfg is None:
         il_cfg = IlRunnerCfg(policy=cfg.policy)
-        print_info(f"Using default IL configuration for {cfg.policy.upper()}")
+
+    # Connect to engine first — nothing else matters if this fails
+    print_info(f"Connecting to LuckyEngine at {il_cfg.host}:{il_cfg.port}...")
+    session = Session(host=il_cfg.host, port=il_cfg.port)
+    session.connect(timeout_s=il_cfg.timeout_s, robot=il_cfg.robot)
+    print_info(f"Connected to LuckyEngine")
+
+    session.set_simulation_mode("realtime")
+    if session.engine_client is not None:
+        session.engine_client.timeout = il_cfg.step_timeout_s
+
+    device = _resolve_device(cfg.device)
+    print_info(f"Loading task: {task} (device={device})")
 
     # Load policy + preprocessor/postprocessor
     print_info(f"Loading {cfg.policy.upper()} checkpoint: {cfg.checkpoint}")
@@ -232,10 +254,11 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
         policy, preprocessor, postprocessor = load_policy(
             checkpoint_path=cfg.checkpoint,
             il_cfg=il_cfg,
-            device=cfg.device,
+            device=device,
         )
     except FileNotFoundError:
         print_info(f"Checkpoint not found: {cfg.checkpoint}", color="red")
+        session.close(stop_engine=False)
         return 1
 
     # Extract obs/action dims and camera names from the policy's input/output features.
@@ -251,21 +274,28 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
                 cam_name = key.split("observation.images.", 1)[1]
                 camera_names.append(cam_name)
                 camera_shape = tuple(feat.shape)
-                print_info(f"  Camera: {cam_name} ({camera_shape})")
+                print_info(f"Camera: {cam_name} ({camera_shape})")
     if hasattr(policy.config, "output_features"):
         for key, feat in policy.config.output_features.items():
             if key == "action":
                 action_dim = feat.shape[0]
 
-    # Connect to LuckyEngine for eval
-    env = make_lerobot_env(
-        il_cfg,
+    # Configure cameras on the session
+    if camera_names:
+        session.configure_cameras([
+            {"name": name, "width": camera_shape[-1], "height": camera_shape[-2]}
+            for name in camera_names
+        ])
+
+    env = LeRobotEnvWrapper(
+        session,
         obs_dim=obs_dim,
         action_dim=action_dim,
-        camera_names=camera_names if camera_names else None,
+        camera_names=camera_names,
         camera_width=camera_shape[-1],
         camera_height=camera_shape[-2],
     )
+    env._skip_launch = True
 
     # Run evaluation
     rr_log = None
@@ -277,20 +307,30 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
             log_interval=1,
         )
 
-    print_info(f"Running IL evaluation for {cfg.episodes} episodes...")
+    print_info(f"Running evaluation for {cfg.episodes} episodes (max {cfg.max_episode_steps} steps)...")
     episode_lengths = []
+
+    # Number of settle steps to run after reset before policy takes over.
+    # Matches the engine's RESET_SETTLE_STEPS (20 at 50Hz = 0.4s).
+    SETTLE_STEPS = 25
+    zero_action = np.zeros(action_dim, dtype=np.float32)
 
     try:
         for ep in range(cfg.episodes):
             obs, _ = env.reset()
             policy.reset()
+
+            # Let the engine settle: send zero-actions so the robot reaches
+            # a stable default pose before the policy starts driving.
+            for _ in range(SETTLE_STEPS):
+                obs, _, _, _, _ = env.step(zero_action)
+
             steps = 0
 
-            for _ in range(10_000):  # Max steps per episode
-                # Convert obs to tensors and normalize via preprocessor
-                batch = {}
-                for key, val in obs.items():
-                    batch[key] = torch.from_numpy(val).unsqueeze(0).to(cfg.device)
+            for _ in range(cfg.max_episode_steps):
+                # Convert obs to tensors with batch dim; preprocessor handles
+                # device placement and normalization.
+                batch = {key: torch.from_numpy(val).unsqueeze(0) for key, val in obs.items()}
                 batch = preprocessor(batch)
 
                 action = policy.select_action(batch)
@@ -305,14 +345,18 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
                 if rr_log is not None:
                     rr_log.log_il_step(obs, action_np, step=steps)
 
+                sys.stdout.write(f"\r  Episode {ep + 1}/{cfg.episodes}  step={steps}/{cfg.max_episode_steps}   ")
+                sys.stdout.flush()
+
                 if terminated or truncated:
                     break
 
             episode_lengths.append(steps)
-            print_info(f"Episode {ep + 1}: length={steps}")
+            sys.stdout.write(f"\r  Episode {ep + 1}/{cfg.episodes}: length={steps}                    \n")
+            sys.stdout.flush()
 
     except KeyboardInterrupt:
-        print_info("Evaluation interrupted by user", color="yellow")
+        print_info("\nEvaluation interrupted by user", color="yellow")
     finally:
         if rr_log is not None:
             rr_log.close()
@@ -320,14 +364,19 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
 
     if episode_lengths:
         print()
-        print_header("IL Evaluation Results")
+        print_header("Evaluation Results")
+        print_info(f"  Task:          {task}")
         print_info(f"  Policy:        {cfg.policy.upper()}")
+        print_info(f"  Checkpoint:    {cfg.checkpoint}")
+        print_info(f"  Device:        {device}")
         print_info(f"  Episodes:      {len(episode_lengths)}")
+        print_info(f"  Max Steps:     {cfg.max_episode_steps}")
         print_info(f"  Mean Length:   {np.mean(episode_lengths):.1f}")
+        print_info(f"  Std Length:    {np.std(episode_lengths):.1f}")
         print_info(f"  Min Length:    {np.min(episode_lengths)}")
         print_info(f"  Max Length:    {np.max(episode_lengths)}")
 
-    print_info("IL evaluation complete!")
+    print_info("Evaluation complete!")
     return 0
 
 

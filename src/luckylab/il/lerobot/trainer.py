@@ -291,9 +291,13 @@ def load_policy(checkpoint_path: str, il_cfg: IlRunnerCfg, device: str = "cpu"):
     policy.eval()
     policy.to(device)
 
-    # Load preprocessor/postprocessor from checkpoint
+    # Load preprocessor/postprocessor from checkpoint.
+    # Override the device_processor step so it matches the requested device
+    # (checkpoints bake in the training device, e.g. "cuda").
     preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg, pretrained_path=checkpoint_path,
+        policy_cfg,
+        pretrained_path=checkpoint_path,
+        preprocessor_overrides={"device_processor": {"device": device}},
     )
 
     return policy, preprocessor, postprocessor
