@@ -235,11 +235,16 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
     if il_cfg is None:
         il_cfg = IlRunnerCfg(policy=cfg.policy)
 
-    # Connect to engine first — nothing else matters if this fails
-    print_info(f"Connecting to LuckyEngine at {il_cfg.host}:{il_cfg.port}...")
+    # Connect to engine — either launch a new one or attach to an existing one.
     session = Session(host=il_cfg.host, port=il_cfg.port)
-    session.connect(timeout_s=il_cfg.timeout_s, robot=il_cfg.robot)
-    print_info(f"Connected to LuckyEngine")
+    if il_cfg.skip_launch:
+        print_info(f"Connecting to LuckyEngine at {il_cfg.host}:{il_cfg.port}...")
+        session.connect(timeout_s=il_cfg.timeout_s, robot=il_cfg.robot)
+    else:
+        print_info(f"Launching LuckyEngine (scene={il_cfg.scene}, robot={il_cfg.robot})...")
+        print_info("Waiting for engine to start and scene to load (this may take 30-60s)...")
+        session.start(scene=il_cfg.scene, robot=il_cfg.robot, task="")
+    print_info("Connected to LuckyEngine.")
 
     session.set_simulation_mode("realtime")
     if session.engine_client is not None:
