@@ -80,5 +80,3 @@ class IlRunnerCfg:
     """Per-step physics timeout in seconds."""
     skip_launch: bool = True
     """Skip launching engine (connect to existing)."""
-    simulation_mode: str = "realtime"
-    """Simulation timing mode. IL inference always uses 'realtime'."""

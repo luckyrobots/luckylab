@@ -12,7 +12,7 @@ register_task(
             experiment_name="piper_blockstacking_act",
             robot="piper",
             scene="blockstacking",
-            host="172.24.160.1",
+            host="127.0.0.1",
             port=50051,
         ),
         "diffusion": IlRunnerCfg(
@@ -21,7 +21,7 @@ register_task(
             experiment_name="piper_blockstacking_diffusion",
             robot="piper",
             scene="blockstacking",
-            host="172.24.160.1",
+            host="127.0.0.1",
             port=50051,
         ),
     },

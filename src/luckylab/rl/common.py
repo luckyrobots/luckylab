@@ -50,7 +50,6 @@ def print_config(
     t.add_row(["Device", device])
     t.add_row(["Timesteps", f"{rl_cfg.max_iterations:,}"])
     t.add_row(["Seed", rl_cfg.seed])
-    t.add_row(["Sim Mode", env_cfg.simulation_mode])
     t.add_row(["Episode", f"{env_cfg.episode_length_s}s ({env.max_episode_length} steps @ {1/env.step_dt:.0f} Hz)"])
     if rl_cfg.wandb:
         t.add_row(["Wandb", rl_cfg.wandb_project])

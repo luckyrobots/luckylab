@@ -77,9 +77,6 @@ class ManagerBasedRlEnvCfg:
     """Per-step physics timeout in seconds (default 30s; engine default is 5s)."""
     skip_launch: bool = True
     """Skip launching engine (connect to existing)."""
-    simulation_mode: str = "fast"
-    """Simulation timing mode: 'fast' (training), 'realtime' (visualization), 'deterministic' (reproducibility)."""
-
     # MDP configs.
     rewards: dict[str, RewardTermCfg] = field(default_factory=dict)
     """Reward terms: name -> config."""
@@ -310,14 +307,6 @@ class ManagerBasedRlEnv:
             self.luckyrobots.close(stop_engine=not self.cfg.skip_launch)
         print_info("Environment closed")
 
-    def set_simulation_mode(self, mode: str) -> None:
-        """Change simulation timing mode.
-
-        Args:
-            mode: 'fast' (training), 'realtime' (visualization), 'deterministic' (reproducibility)
-        """
-        self.luckyrobots.set_simulation_mode(mode)
-
     @staticmethod
     def seed(seed: int) -> None:
         """Set the random seed.
@@ -342,7 +331,6 @@ class ManagerBasedRlEnv:
                 task=self.cfg.task,
                 timeout_s=self.cfg.timeout_s,
             )
-        self.luckyrobots.set_simulation_mode(self.cfg.simulation_mode)
         # Override the default 5s per-RPC timeout on the underlying gRPC client.
         if self.luckyrobots.engine_client is not None:
             self.luckyrobots.engine_client.timeout = self.cfg.step_timeout_s

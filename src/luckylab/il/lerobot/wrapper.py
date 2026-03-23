@@ -129,9 +129,6 @@ def make_lerobot_env(
             timeout_s=il_cfg.timeout_s,
         )
 
-    # IL inference runs in realtime — physics steps at real-world speed.
-    session.set_simulation_mode("realtime")
-
     # Override the default 5s per-RPC timeout on the underlying gRPC client.
     if session.engine_client is not None:
         session.engine_client.timeout = il_cfg.step_timeout_s
