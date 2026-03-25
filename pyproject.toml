@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "luckyrobots>=0.1.82",
+    "luckyrobots>=0.1.84",
     "gymnasium>=0.29.1",
     "numpy>=1.24.0",
     "prettytable>=3.10.0",
