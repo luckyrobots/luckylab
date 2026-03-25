@@ -314,6 +314,8 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
 
     # Helper to report progress to the engine (fire-and-forget)
     def _report(phase: str, ep: int = 0, step: int = 0, status: str = "", finished: bool = False):
+        if not hasattr(session, "report_progress"):
+            return
         session.report_progress(
             run_id=run_id,
             task_name=task,
