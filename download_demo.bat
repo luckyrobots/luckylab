@@ -8,10 +8,12 @@ set ZIP_NAME=%DEMO_NAME%.zip
 set DOWNLOAD_URL=https://github.com/%REPO%/releases/download/%TAG%/%ZIP_NAME%
 
 rem Resolve the directory this script lives in (the luckylab root)
+rem %~dp0 has a trailing backslash — remove it so quoted paths don't break
 set SCRIPT_DIR=%~dp0
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
 echo Downloading demo from %DOWNLOAD_URL% ...
-curl -L "%DOWNLOAD_URL%" -o "%SCRIPT_DIR%%ZIP_NAME%"
+curl -L "%DOWNLOAD_URL%" -o "%SCRIPT_DIR%\%ZIP_NAME%"
 if %errorlevel% neq 0 (
     echo ERROR: Download failed. Make sure curl is available and the URL is correct.
     pause
@@ -19,14 +21,14 @@ if %errorlevel% neq 0 (
 )
 
 echo Extracting demo ...
-tar -xf "%SCRIPT_DIR%%ZIP_NAME%" -C "%SCRIPT_DIR%"
+powershell -Command "Expand-Archive -Path '%SCRIPT_DIR%\%ZIP_NAME%' -DestinationPath '%SCRIPT_DIR%' -Force"
 if %errorlevel% neq 0 (
     echo ERROR: Extraction failed.
     pause
     exit /b 1
 )
 
-del "%SCRIPT_DIR%%ZIP_NAME%"
+del "%SCRIPT_DIR%\%ZIP_NAME%"
 
 echo.
 echo Demo installed successfully.

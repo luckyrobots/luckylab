@@ -16,6 +16,9 @@ curl -L "${DOWNLOAD_URL}" -o "${SCRIPT_DIR}/${ZIP_NAME}"
 echo "Extracting demo ..."
 unzip -o "${SCRIPT_DIR}/${ZIP_NAME}" -d "${SCRIPT_DIR}"
 
+chmod -R u+rwX "${SCRIPT_DIR}/runs"
+chmod +x "${SCRIPT_DIR}/run_demo.sh"
+
 rm "${SCRIPT_DIR}/${ZIP_NAME}"
 
 echo ""
