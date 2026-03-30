@@ -23,12 +23,12 @@ LuckyLab is the training and inference layer for robots simulated in [LuckyEngin
 ### 1. Installation
 
 ```bash
-git clone https://github.com/luckyrobots/luckylab.git
+git clone -b mick/release-2026-1 --single-branch https://github.com/luckyrobots/luckylab.git
 cd luckylab
 
 # Run the setup script for your OS 
 ./setup.bat # Windows 
-setup.sh # Linux
+./setup.sh # Linux
 ```
 ### 2. Prepare LuckyEngine
 
@@ -54,7 +54,7 @@ setup.sh # Linux
 ```bash
 # Run the gRPC viewer script for your OS 
 ./run_debug_viewer.bat # Windows 
-run_debug_viewer.sh # Linux
+./run_debug_viewer.sh # Linux
 ```
 
 If everything has been configured correctly, this script will log the inputs/outputs between LuckyLab and LuckyEngine, and display the camera feed being exported from LuckyEngine to LuckyLab.
@@ -67,8 +67,8 @@ If everything has been configured correctly, this script will log the inputs/out
 ./run_demo.bat
 
 # Linux
-download_demo.sh
-run_demo.sh
+./download_demo.sh
+./run_demo.sh
 ```
 
 Manually downloaded models need to be placed within their own subfolder within the /runs/ directory of LuckyLab, where-as the download scripts already extract to the appropriate nested location.
