@@ -1,255 +1,138 @@
 <p align="center">
   <h1 align="center">LuckyLab</h1>
   <p align="center">
-    <strong>A unified robot learning framework powered by <a href="https://github.com/luckyrobots/luckyrobots">LuckyEngine</a></strong>
+    <strong>RL and IL training framework for <a href="https://github.com/luckyrobots/LuckyEngine">LuckyEngine</a></strong>
   </p>
   <p align="center">
+    <a href="https://luckyrobots.com"><img src="https://img.shields.io/badge/Lucky_Robots-ff6600?style=flat&logoColor=white" alt="Lucky Robots"></a>
+    <a href="https://github.com/luckyrobots/LuckyEngine"><img src="https://img.shields.io/badge/LuckyEngine-0984e3?style=flat&logoColor=white" alt="LuckyEngine"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
-    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
+  </p>
+  <p align="center">
+    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white" alt="Python 3.10+"></a>
+    <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-%3E%3D2.0-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch >= 2.0"></a>
+    <a href="https://github.com/luckyrobots/luckyrobots"><img src="https://img.shields.io/badge/luckyrobots-%3E%3D0.1.84-00b894" alt="luckyrobots >= 0.1.84"></a>
     <a href="https://docs.astral.sh/ruff/"><img src="https://img.shields.io/badge/code%20style-ruff-000000.svg" alt="Ruff"></a>
   </p>
 </p>
 
-LuckyLab is a modular, config-driven framework that brings reinforcement learning, imitation learning, and real-time visualization together in one place. It communicates with LuckyEngine through [luckyrobots](https://github.com/luckyrobots/luckyrobots) and runs on both CPU and GPU.
-
-The framework ships with locomotion and manipulation tasks but is easily extensible to any robot or task. It supports all imitation learning algorithms in [LeRobot](https://github.com/huggingface/lerobot) and multiple RL algorithms via [skrl](https://github.com/Toni-SM/skrl) and [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3). Live inspection is available through [Rerun](https://rerun.io) and [Viser](https://github.com/nerfstudio-project/viser).
-
-| Robot | Task | Learning |
-|-------|------|----------|
-| Unitree Go2 | Velocity tracking | RL (PPO, SAC, TD3, DDPG) |
-| Piper | Pick-and-place | IL (via LeRobot) |
+LuckyLab is the training and inference layer for robots simulated in [LuckyEngine](https://github.com/luckyrobots/LuckyEngine). It connects to LuckyEngine over gRPC (via the [luckyrobots](https://github.com/luckyrobots/luckyrobots) client), sends joint-level actions, and receives observations each step — all physics and rendering runs in LuckyEngine.
 
 ---
-
-## Requirements
-
-- Python 3.10+
-- [LuckyEngine](https://luckyrobots.com) executable
-- [luckyrobots](https://github.com/luckyrobots/luckyrobots) >= 0.1.81
-- PyTorch >= 2.0
-
-## Installation
+## Quick Start
+### 1. Installation
 
 ```bash
 git clone https://github.com/luckyrobots/luckylab.git
 cd luckylab
 
-# Core + RL
-uv sync --group rl
-
-# Core + IL (LeRobot)
-uv sync --group il
-
-# Everything (RL + IL + Rerun + dev tools)
-uv sync --all-groups
+# Run the setup script for your OS 
+./setup.bat # Windows 
+setup.sh # Linux
 ```
+### 2. Prepare LuckyEngine
+
+1. Launch LuckyEngine
+2. Download the Piper Block Stacking project
+3. Open the Piper Block Stacking scene
+4. Open the gRPC Panel
+<table><tr><td>
+
+5. Follow the prompts to ensure:
+   - Action Gate is **Enabled**
+   - Server is **Running**
+   - Scene is **Playing**
+
+</td><td>
+
+<img width="300" alt="gRPC Panel" src="https://github.com/user-attachments/assets/352bd83e-29d7-4c6f-af79-b27ba412c4e4" />
+
+</td></tr></table>
+
+### 3. Run Debug Viewer
+
+```bash
+# Run the gRPC viewer script for your OS 
+./run_debug_viewer.bat # Windows 
+run_debug_viewer.sh # Linux
+```
+
+If everything has been configured correctly, this script will log the inputs/outputs between LuckyLab and LuckyEngine, and display the camera feed being exported from LuckyEngine to LuckyLab.
+### 4. Download & Run Piper Block Stacking Demo Model
+
+```bash
+# Run the model download script for your OS
+# Windows 
+./download_demo.bat 
+./run_demo.bat
+
+# Linux
+download_demo.sh
+run_demo.sh
+```
+
+Manually downloaded models need to be placed within their own subfolder within the /runs/ directory of LuckyLab, where-as the download scripts already extract to the appropriate nested location.
 
 ---
 
-## Quick Start
+## How It Works
 
-### Train
+```mermaid
+graph TD
+    LE[LuckyEngine]
 
-```bash
-# RL — train SAC on the Go2
-python -m luckylab.scripts.train go2_velocity_flat \
-    --agent.algorithm sac --agent.backend skrl --device cuda
+    LE <--> LR[luckyrobots client]
 
-# IL — train ACT on a local dataset
-python -m luckylab.scripts.train piper_pickandplace \
-    --il.policy act --il.dataset-repo-id piper/pickandplace --device cuda
+    LR --> ENV
+
+    subgraph LuckyLab ["&nbsp;&nbsp;&nbsp;&nbsp;LuckyLab&nbsp;&nbsp;&nbsp;&nbsp;"]
+        ENV[ManagerBasedEnv]
+        ENV --- OBS[Observations]
+        ENV --- ACT[Actions]
+        ENV --- REW[Rewards]
+        ENV --- TERM[Terminations]
+        ENV --- CURR[Curriculum]
+    end
+
+    subgraph Backends ["Training Backends"]
+        SKRL[skrl — RL]
+        SB3[SB3 — RL]
+        LEROBOT[LeRobot — IL]
+    end
+
+    ENV --> Backends
+
+    style LE fill:#1a1a2e,stroke:#0984e3,stroke-width:2px,color:#74b9ff
+    style LR fill:#1a1a2e,stroke:#00b894,stroke-width:2px,color:#55efc4
+
+    style LuckyLab fill:#16213e,stroke:#6c5ce7,stroke-width:2px,color:#a29bfe
+    style ENV fill:#1a1a2e,stroke:#6c5ce7,stroke-width:2px,color:#a29bfe
+    style OBS fill:#1a1a2e,stroke:#636e72,stroke-width:1px,color:#dfe6e9
+    style ACT fill:#1a1a2e,stroke:#636e72,stroke-width:1px,color:#dfe6e9
+    style REW fill:#1a1a2e,stroke:#636e72,stroke-width:1px,color:#dfe6e9
+    style TERM fill:#1a1a2e,stroke:#636e72,stroke-width:1px,color:#dfe6e9
+    style CURR fill:#1a1a2e,stroke:#636e72,stroke-width:1px,color:#dfe6e9
+
+    style Backends fill:#16213e,stroke:#e17055,stroke-width:2px,color:#fab1a0
+    style SKRL fill:#1a1a2e,stroke:#e17055,stroke-width:2px,color:#fab1a0
+    style SB3 fill:#1a1a2e,stroke:#e17055,stroke-width:2px,color:#fab1a0
+    style LEROBOT fill:#1a1a2e,stroke:#fdcb6e,stroke-width:2px,color:#ffeaa7
 ```
 
-### Evaluate
-
-```bash
-# RL — with keyboard control
-python -m luckylab.scripts.play go2_velocity_flat \
-    --algorithm sac --checkpoint runs/go2_velocity_sac/checkpoints/best_agent.pt \
-    --keyboard
-
-# IL
-python -m luckylab.scripts.play piper_pickandplace \
-    --policy act --checkpoint runs/luckylab_il/final
-```
-
-Keyboard controls: **W/S** forward/back, **A/D** strafe, **Q/E** turn, **Space** zero, **Esc** quit.
-
-### Visualize
-
-```bash
-# Browse a dataset in Rerun (opens in browser)
-python -m luckylab.scripts.visualize_dataset \
-    --repo-id piper/pickandplace --episode-index 0 --web
-
-# List all registered tasks
-python -m luckylab.scripts.list_envs
-```
+LuckyEngine handles all physics simulation (built on MuJoCo). LuckyLab is purely a training orchestrator — it does not run physics locally. The [luckyrobots](https://github.com/luckyrobots/luckyrobots) package manages the gRPC connection, engine lifecycle, and domain randomization protocol.
 
 ---
 
-## Reinforcement Learning
+## Status
 
-Four algorithms across two backends, all configurable via CLI or Python:
-
-| Algorithm | Type | Backends |
-|-----------|------|----------|
-| **PPO** | On-policy | skrl, sb3 |
-| **SAC** | Off-policy | skrl, sb3 |
-| **TD3** | Off-policy | skrl, sb3 |
-| **DDPG** | Off-policy | skrl, sb3 |
-
-```bash
-python -m luckylab.scripts.train go2_velocity_flat \
-    --agent.algorithm sac --agent.backend skrl \
-    --agent.max-iterations 5000 \
-    --env.num-envs 4096 \
-    --device cuda
-```
-
-```python
-from luckylab.rl import train, RlRunnerCfg
-from luckylab.tasks import load_env_cfg
-
-env_cfg = load_env_cfg("go2_velocity_flat")
-rl_cfg = RlRunnerCfg(algorithm="sac", backend="skrl", max_iterations=5000)
-train(env_cfg=env_cfg, rl_cfg=rl_cfg, device="cuda")
-```
-
-> **Note:** LuckyEngine does not currently support environment parallelization, so on-policy algorithms like PPO that depend on large batch collection are not recommended. Off-policy algorithms like SAC are the best fit for now. Parallelization support is actively being worked on.
-
-> **Backend recommendation:** Stable Baselines3 is not designed for GPU training. If you want to train on GPU, use the skrl backend (`--agent.backend skrl`).
-
----
-
-## Imitation Learning
-
-LuckyLab integrates with [LeRobot](https://github.com/huggingface/lerobot) for imitation learning. ACT and Diffusion Policy are ready to use out of the box. Other LeRobot policies (Pi0, SmolVLA, etc.) are supported but require registering a task config for them first, similar to how the ACT and Diffusion configs are set up.
-
-```bash
-python -m luckylab.scripts.train piper_pickandplace \
-    --il.policy act \
-    --il.dataset-repo-id piper/pickandplace \
-    --il.batch-size 8 \
-    --il.num-train-steps 100000 \
-    --device cuda
-```
-
-Datasets are loaded from the [HuggingFace Hub](https://huggingface.co/datasets) or from a local directory at `~/.luckyrobots/data/` (configurable via `LUCKYROBOTS_DATA_HOME`).
-
----
-
-## Tasks
-
-Tasks bundle an environment config with RL and/or IL configs. The registry makes it easy to add new ones:
-
-```python
-from luckylab.tasks import register_task
-from luckylab.envs import ManagerBasedRlEnvCfg
-from luckylab.rl import RlRunnerCfg
-
-env_cfg = ManagerBasedRlEnvCfg(
-    decimation=4,
-    robot="unitreego2",
-    scene="velocity",
-    observations={...},
-    actions={...},
-    rewards={...},
-    terminations={...},
-)
-
-register_task(
-    "my_task",
-    env_cfg,
-    rl_cfgs={"ppo": RlRunnerCfg(algorithm="ppo", max_iterations=3000)},
-)
-```
-
----
-
-## Architecture
-
-LuckyLab uses a manager-based environment where each MDP component is handled by a dedicated manager, configured with direct function references:
-
-```
-ManagerBasedRlEnv
-├── ObservationManager   Observation groups with noise, delay, and history
-├── ActionManager        Action scaling, offset, and joint commands
-├── RewardManager        Weighted sum of reward terms
-├── TerminationManager   Episode termination conditions
-└── CurriculumManager    Progressive difficulty adjustment
-```
-
-```python
-from luckylab.managers import RewardTermCfg, TerminationTermCfg
-from luckylab.tasks.velocity import mdp
-
-rewards = {
-    "track_velocity": RewardTermCfg(func=mdp.track_linear_velocity, weight=2.0, params={"std": 0.5}),
-    "action_rate": RewardTermCfg(func=mdp.action_rate_l2, weight=-0.1),
-}
-
-terminations = {
-    "time_out": TerminationTermCfg(func=mdp.time_out, time_out=True),
-    "fell_over": TerminationTermCfg(func=mdp.bad_orientation, params={"limit_angle": 1.2}),
-}
-```
-
----
-
-## Visualization & Logging
-
-**Policy Viewer** — a web-based MuJoCo viewer powered by [Viser](https://github.com/nerfstudio-project/viser) for inspecting trained RL policies. Renders the robot in a browser with velocity command sliders, pause/play, speed control, and keyboard input — no LuckyEngine connection required.
-
-```bash
-# Open http://localhost:8080 after starting
-python -m luckylab.viewer.run_policy runs/go2_velocity_sac/checkpoints/best_agent.pt
-```
-
-**Rerun** — live step-by-step inspection of observations, actions, rewards, and camera feeds. No LuckyEngine connection required.
-
-```bash
-# Dataset viewer
-python -m luckylab.scripts.visualize_dataset --repo-id piper/pickandplace --web
-
-# Attach to evaluation
-python -m luckylab.scripts.play go2_velocity_flat --algorithm sac --checkpoint best_agent.pt --rerun
-```
-
-**Weights & Biases** — enabled by default for both RL and IL. Disable with `--agent.wandb false` or `--il.wandb false`.
-
----
-
-## Project Structure
-
-```
-src/luckylab/
-├── configs/          Simulation contract and shared configs
-├── entity/           Robot entity and observation data
-├── envs/             ManagerBasedRlEnv and MDP functions
-│   └── mdp/          Observations, actions, rewards, terminations, curriculum
-├── il/               Imitation learning
-│   └── lerobot/      LeRobot integration (trainer, wrapper)
-├── managers/         Observation, action, reward, termination, curriculum managers
-├── rl/               Reinforcement learning
-│   ├── skrl/         skrl backend
-│   ├── sb3/          Stable Baselines3 backend
-│   ├── config.py     RlRunnerCfg and algorithm configs
-│   └── common.py     Shared utilities
-├── scene/            Scene management
-├── scripts/          CLI entry points (train, play, list_envs, visualize_dataset)
-├── tasks/            Task definitions and registry
-│   ├── velocity/     Locomotion velocity tracking
-│   └── pickandplace/ Manipulation (IL)
-├── utils/            NaN guard, noise models, rerun logger, keyboard, buffers
-└── viewer/           Debug visualization with Viser
-```
+LuckyLab is in **early development (alpha)**. The Piper block-stacking demo above is the current focus. The codebase also includes scaffolding for reinforcement learning (Go2 velocity tracking via [skrl](https://github.com/Toni-SM/skrl) / [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3)) and additional imitation learning policies via [LeRobot](https://github.com/huggingface/lerobot).
 
 ---
 
 ## Development
 
 ```bash
+# Manual install with uv (instead of setup scripts)
 uv sync --all-groups
 uv run pre-commit install
 
@@ -260,19 +143,3 @@ uv run pytest tests -v
 uv run ruff check src tests
 uv run ruff format src tests
 ```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
----
-
-## Acknowledgments
-
-LuckyLab is inspired by:
-- [MJLab](https://github.com/google-deepmind/mujoco_playground) — manager-based, config-driven environment architecture
-- [LeRobot](https://github.com/huggingface/lerobot) — imitation learning policies and dataset format
-
-Built on top of [skrl](https://github.com/Toni-SM/skrl) and [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3) for RL training.
-
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
