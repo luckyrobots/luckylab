@@ -89,6 +89,50 @@ class FpsCounter:
         return (len(self._times) - 1) / elapsed if elapsed > 0 else 0.0
 
 
+class BandwidthTracker:
+    """Tracks accumulated bytes sent and received."""
+
+    GRPC_OVERHEAD = 80  # approximate per-message framing/header bytes
+
+    def __init__(self):
+        self.total_sent = 0
+        self.total_received = 0
+
+    def record_step(self, action_count: int, obs: object) -> None:
+        # Sent: actions (float32) + camera requests + proto overhead
+        sent = action_count * 4 + self.GRPC_OVERHEAD
+        self.total_sent += sent
+
+        # Received: observation floats + action floats + camera frames + overhead
+        recv = self.GRPC_OVERHEAD
+        if obs.observation:
+            recv += len(obs.observation) * 4
+        if obs.actions:
+            recv += len(obs.actions) * 4
+        for cf in obs.camera_frames:
+            recv += len(cf.data) + 32  # frame data + per-frame proto fields
+        self.total_received += recv
+
+    def record_stream_frame(self, data_len: int) -> None:
+        """Record a passive-mode streamed camera frame."""
+        self.total_received += data_len + 32 + self.GRPC_OVERHEAD
+
+    @property
+    def total(self) -> int:
+        return self.total_sent + self.total_received
+
+    @staticmethod
+    def fmt(nbytes: int) -> str:
+        if nbytes < 1024:
+            return f"{nbytes} B"
+        elif nbytes < 1024 * 1024:
+            return f"{nbytes / 1024:.1f} KB"
+        elif nbytes < 1024 * 1024 * 1024:
+            return f"{nbytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{nbytes / (1024 * 1024 * 1024):.2f} GB"
+
+
 class ViewerWindow:
     """Tkinter window that displays camera frames with an FPS overlay."""
 
@@ -130,15 +174,22 @@ class ViewerWindow:
     def closed(self) -> bool:
         return self._closed
 
-    def update_frame(self, img: Image.Image, fps: float, frame_number: int):
+    def update_frame(self, img: Image.Image, fps: float, frame_number: int,
+                     bw: BandwidthTracker | None = None):
         if self._closed:
             return
 
-        # Draw FPS overlay
+        # Draw overlay
         draw = ImageDraw.Draw(img)
-        text = f"FPS: {fps:.1f}  Frame: {frame_number}"
-        draw.rectangle([(0, 0), (img.width, 18)], fill=(0, 0, 0, 128))
-        draw.text((4, 2), text, fill=(0, 255, 0))
+        line1 = f"FPS: {fps:.1f}  Frame: {frame_number}"
+        overlay_h = 18
+        if bw is not None:
+            line2 = f"Sent: {bw.fmt(bw.total_sent)}  Recv: {bw.fmt(bw.total_received)}  Total: {bw.fmt(bw.total)}"
+            overlay_h = 32
+        draw.rectangle([(0, 0), (img.width, overlay_h)], fill=(0, 0, 0, 128))
+        draw.text((4, 2), line1, fill=(0, 255, 0))
+        if bw is not None:
+            draw.text((4, 16), line2, fill=(0, 255, 0))
 
         # Scale up if needed
         if self._display_scale > 1:
@@ -210,6 +261,7 @@ def run_active(args: argparse.Namespace, root: tk.Tk) -> int:
         windows[name] = ViewerWindow(root, f"Camera: {name}", args.width, args.height)
 
     fps_counter = FpsCounter()
+    bw_tracker = BandwidthTracker()
     frame_idx = 0
     metadata_interval = max(1, int(args.metadata_hz))
 
@@ -246,6 +298,7 @@ def run_active(args: argparse.Namespace, root: tk.Tk) -> int:
 
         fps = fps_counter.tick()
         frame_idx += 1
+        bw_tracker.record_step(action_size, obs)
 
         # Update camera windows
         if frame_idx <= 3 and not obs.camera_frames:
@@ -268,7 +321,7 @@ def run_active(args: argparse.Namespace, root: tk.Tk) -> int:
             win = windows.get(cf.name)
             if win and not win.closed:
                 img = raw_to_rgb_image(cf.data, cf.width, cf.height, cf.channels)
-                win.update_frame(img, fps, obs.frame_number)
+                win.update_frame(img, fps, obs.frame_number, bw_tracker)
 
         # Print metadata periodically
         if frame_idx % metadata_interval == 0:
@@ -367,6 +420,8 @@ def run_passive(args: argparse.Namespace, root: tk.Tk) -> int:
         threads.append(t)
         log(f"Started stream for '{name}' @ {args.width}x{args.height} target_fps={args.fps}")
 
+    bw_tracker = BandwidthTracker()
+
     log("Streaming. Press 'q' in any window or close window to quit.")
     log("=" * 60)
 
@@ -396,6 +451,7 @@ def run_passive(args: argparse.Namespace, root: tk.Tk) -> int:
 
             fps = fps_counters[cam_name].tick()
             frame_counts[cam_name] += 1
+            bw_tracker.record_stream_frame(len(data))
 
             # Diagnostic: log pixel stats for first few frames
             if frame_counts[cam_name] <= 3:
@@ -409,7 +465,7 @@ def run_passive(args: argparse.Namespace, root: tk.Tk) -> int:
             win = windows.get(cam_name)
             if win and not win.closed:
                 img = raw_to_rgb_image(data, w, h, ch)
-                win.update_frame(img, fps, fnum)
+                win.update_frame(img, fps, fnum, bw_tracker)
 
             if frame_counts[cam_name] % metadata_interval == 0:
                 log(
