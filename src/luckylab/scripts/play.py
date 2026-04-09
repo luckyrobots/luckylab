@@ -16,6 +16,7 @@ Keyboard controls (--keyboard mode, RL only):
 
 import copy
 import sys
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -40,6 +41,8 @@ class PlayRlConfig:
     """Path to the checkpoint file."""
     algorithm: str
     """RL algorithm used for training (ppo, sac, td3, ddpg)."""
+    backend: str = "skrl"
+    """RL backend library (skrl, sb3)."""
     device: str = "auto"
     """Device to run inference on (auto = cuda if available, else cpu)."""
     episodes: int = 10
@@ -85,14 +88,13 @@ def run_play_rl(task: str, cfg: PlayRlConfig) -> int:
         print_info(str(e), color="red")
         return 1
 
-    env_cfg.simulation_mode = "realtime"
-
     rl_cfg = load_rl_cfg(task, cfg.algorithm)
     if rl_cfg is None:
-        rl_cfg = RlRunnerCfg(algorithm=cfg.algorithm)
+        rl_cfg = RlRunnerCfg(algorithm=cfg.algorithm, backend=cfg.backend)
         print_info(f"Using default RL configuration for {cfg.algorithm.upper()}")
     else:
         rl_cfg = copy.deepcopy(rl_cfg)
+        rl_cfg.backend = cfg.backend
         print_info(f"Using {cfg.algorithm.upper()} configuration")
 
     print_info(f"Loading checkpoint: {cfg.checkpoint}")
@@ -224,29 +226,23 @@ def run_play_rl(task: str, cfg: PlayRlConfig) -> int:
 def run_play_il(task: str, cfg: PlayIlConfig) -> int:
     """Run IL evaluation with the given configuration."""
     import torch
+    from luckyrobots import Session
 
     from luckylab.il import IlRunnerCfg, load_policy
     from luckylab.il.lerobot.wrapper import LeRobotEnvWrapper
     from luckylab.tasks import load_il_cfg
-    from luckyrobots import Session
 
     # Get IL config for eval connection info
     il_cfg = load_il_cfg(task, cfg.policy)
     if il_cfg is None:
         il_cfg = IlRunnerCfg(policy=cfg.policy)
 
-    # Connect to engine — either launch a new one or attach to an existing one.
+    # Connect to engine first — nothing else matters if this fails
+    print_info(f"Connecting to LuckyEngine at {il_cfg.host}:{il_cfg.port}...")
     session = Session(host=il_cfg.host, port=il_cfg.port)
-    if il_cfg.skip_launch:
-        print_info(f"Connecting to LuckyEngine at {il_cfg.host}:{il_cfg.port}...")
-        session.connect(timeout_s=il_cfg.timeout_s, robot=il_cfg.robot)
-    else:
-        print_info(f"Launching LuckyEngine (scene={il_cfg.scene}, robot={il_cfg.robot})...")
-        print_info("Waiting for engine to start and scene to load (this may take 30-60s)...")
-        session.start(scene=il_cfg.scene, robot=il_cfg.robot, task="")
-    print_info("Connected to LuckyEngine.")
+    session.connect(timeout_s=il_cfg.timeout_s, robot=il_cfg.robot)
+    print_info("Connected to LuckyEngine")
 
-    session.set_simulation_mode("realtime")
     if session.engine_client is not None:
         session.engine_client.timeout = il_cfg.step_timeout_s
 
@@ -313,11 +309,35 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
         )
 
     print_info(f"Running evaluation for {cfg.episodes} episodes (max {cfg.max_episode_steps} steps)...")
+    eval_start_time = time.perf_counter()
     episode_lengths = []
 
+    # Generate a unique run ID for progress tracking
+    run_id = f"{task}_{cfg.policy}_{int(eval_start_time)}"
+
+    # Helper to report progress to the engine (fire-and-forget)
+    def _report(phase: str, ep: int = 0, step: int = 0, status: str = "", finished: bool = False):
+        if not hasattr(session, "report_progress"):
+            return
+        session.report_progress(
+            run_id=run_id,
+            task_name=task,
+            policy_name=cfg.policy.upper(),
+            phase=phase,
+            current_episode=ep,
+            total_episodes=cfg.episodes,
+            current_step=step,
+            max_steps=cfg.max_episode_steps,
+            elapsed_s=time.perf_counter() - eval_start_time,
+            status_text=status,
+            finished=finished,
+        )
+
+    _report("loading", status="Loading policy and configuring environment")
+
     # Number of settle steps to run after reset before policy takes over.
-    # Matches the engine's RESET_SETTLE_STEPS (20 at 50Hz = 0.4s).
-    SETTLE_STEPS = 25
+    # Matches the engine's RESET_settle_steps (20 at 50Hz = 0.4s).
+    settle_steps = 25
     zero_action = np.zeros(action_dim, dtype=np.float32)
 
     try:
@@ -327,10 +347,11 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
 
             # Let the engine settle: send zero-actions so the robot reaches
             # a stable default pose before the policy starts driving.
-            for _ in range(SETTLE_STEPS):
+            for _ in range(settle_steps):
                 obs, _, _, _, _ = env.step(zero_action)
 
             steps = 0
+            _report("running", ep=ep + 1, step=0, status=f"Episode {ep + 1}/{cfg.episodes}: settling")
 
             for _ in range(cfg.max_episode_steps):
                 # Convert obs to tensors with batch dim; preprocessor handles
@@ -350,6 +371,11 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
                 if rr_log is not None:
                     rr_log.log_il_step(obs, action_np, step=steps)
 
+                # Report progress every 10 steps to avoid spamming
+                if steps % 10 == 0 or steps == 1:
+                    _report("running", ep=ep + 1, step=steps,
+                            status=f"Episode {ep + 1}/{cfg.episodes}: step {steps}/{cfg.max_episode_steps}")
+
                 sys.stdout.write(f"\r  Episode {ep + 1}/{cfg.episodes}  step={steps}/{cfg.max_episode_steps}   ")
                 sys.stdout.flush()
 
@@ -357,12 +383,26 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
                     break
 
             episode_lengths.append(steps)
+            _report("running", ep=ep + 1, step=steps,
+                    status=f"Episode {ep + 1}/{cfg.episodes}: length={steps}")
             sys.stdout.write(f"\r  Episode {ep + 1}/{cfg.episodes}: length={steps}                    \n")
             sys.stdout.flush()
 
     except KeyboardInterrupt:
         print_info("\nEvaluation interrupted by user", color="yellow")
     finally:
+        # Report completion BEFORE closing the session (which tears down gRPC)
+        total_time = time.perf_counter() - eval_start_time
+        if episode_lengths:
+            results_summary = (
+                f"Episodes: {len(episode_lengths)} | "
+                f"Mean Length: {np.mean(episode_lengths):.1f} | "
+                f"Min: {np.min(episode_lengths)} | Max: {np.max(episode_lengths)} | "
+                f"Time: {total_time:.1f}s"
+            )
+            _report("complete", ep=len(episode_lengths), step=0,
+                    status=results_summary,
+                    finished=True)
         if rr_log is not None:
             rr_log.close()
         env.close()
@@ -380,6 +420,7 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
         print_info(f"  Std Length:    {np.std(episode_lengths):.1f}")
         print_info(f"  Min Length:    {np.min(episode_lengths)}")
         print_info(f"  Max Length:    {np.max(episode_lengths)}")
+        print_info(f"  Total Time:   {total_time:.1f}s")
 
     print_info("Evaluation complete!")
     return 0

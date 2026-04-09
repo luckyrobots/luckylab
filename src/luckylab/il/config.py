@@ -70,6 +70,8 @@ class IlRunnerCfg:
     """LuckyEngine scene to use for evaluation."""
     robot: str = ""
     """Robot type for evaluation."""
+    task: str = ""
+    """Task name (e.g. 'pickandplace')."""
     host: str = "localhost"
     """LuckyEngine gRPC host."""
     port: int = 50051
@@ -80,5 +82,3 @@ class IlRunnerCfg:
     """Per-step physics timeout in seconds."""
     skip_launch: bool = True
     """Skip launching engine (connect to existing)."""
-    simulation_mode: str = "realtime"
-    """Simulation timing mode. IL inference always uses 'realtime'."""

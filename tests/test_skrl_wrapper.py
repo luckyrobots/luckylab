@@ -73,7 +73,6 @@ class MockCurriculumManager:
 
 class MockEnvCfg:
     def __init__(self):
-        self.simulation_mode = "fast"
         self.is_finite_horizon = False
         self.nan_guard = NanGuardCfg(enabled=False)
 
@@ -248,27 +247,14 @@ class TestSkrlWrapperVisualization:
         w = SkrlWrapper(env)
         assert w.visualizer is not None
 
-    def test_debug_vis_not_called_in_fast_mode(self):
+    def test_debug_vis_step(self):
         from luckylab.rl.skrl.wrapper import SkrlWrapper
 
         env = MockManagerBasedRlEnv()
-        env.cfg.simulation_mode = "fast"
         w = SkrlWrapper(env)
         actions = torch.zeros(1, 12)
-        # In fast mode, should_draw check is skipped (is_realtime is False)
         w.step(actions)
         # No crash = pass (no engine client in test)
-
-    def test_debug_vis_called_in_realtime_mode(self):
-        from luckylab.rl.skrl.wrapper import SkrlWrapper
-
-        env = MockManagerBasedRlEnv()
-        env.cfg.simulation_mode = "realtime"
-        w = SkrlWrapper(env)
-        actions = torch.zeros(1, 12)
-        # In realtime mode, visualizer.draw_velocity_command is called
-        # but returns False (no engine client in test) — should not crash
-        w.step(actions)
 
 
 class TestSkrlWrapperProperties:
@@ -280,17 +266,6 @@ class TestSkrlWrapperProperties:
         env = MockManagerBasedRlEnv()
         w = SkrlWrapper(env)
         assert w.unwrapped is env
-
-    def test_is_realtime(self):
-        from luckylab.rl.skrl.wrapper import SkrlWrapper
-
-        env = MockManagerBasedRlEnv()
-        env.cfg.simulation_mode = "realtime"
-        w = SkrlWrapper(env)
-        assert w.is_realtime is True
-
-        env.cfg.simulation_mode = "fast"
-        assert w.is_realtime is False
 
     def test_episode_length_buf(self):
         from luckylab.rl.skrl.wrapper import SkrlWrapper

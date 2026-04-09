@@ -80,11 +80,6 @@ class Sb3Wrapper(gymnasium.Env):
             return sum(d[0] if isinstance(d, tuple) else d for d in dim)
         return dim
 
-    @property
-    def is_realtime(self) -> bool:
-        """Check if running in realtime mode."""
-        return getattr(self.cfg, "simulation_mode", "fast") == "realtime"
-
     def _obs_to_numpy(self, obs_dict: dict[str, torch.Tensor]) -> np.ndarray:
         """Extract policy obs, squeeze batch dim, convert to numpy."""
         obs = obs_dict["policy"]

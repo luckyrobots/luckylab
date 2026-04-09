@@ -81,11 +81,6 @@ class SkrlWrapper:
         return self.env
 
     @property
-    def is_realtime(self) -> bool:
-        """Check if running in realtime mode."""
-        return getattr(self.cfg, "simulation_mode", "fast") == "realtime"
-
-    @property
     def episode_length_buf(self) -> torch.Tensor:
         return self.unwrapped.episode_length_buf
 
