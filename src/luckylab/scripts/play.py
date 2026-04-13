@@ -41,6 +41,8 @@ class PlayRlConfig:
     """Path to the checkpoint file."""
     algorithm: str
     """RL algorithm used for training (ppo, sac, td3, ddpg)."""
+    backend: str = "skrl"
+    """RL backend library (skrl, sb3)."""
     device: str = "auto"
     """Device to run inference on (auto = cuda if available, else cpu)."""
     episodes: int = 10
@@ -88,10 +90,11 @@ def run_play_rl(task: str, cfg: PlayRlConfig) -> int:
 
     rl_cfg = load_rl_cfg(task, cfg.algorithm)
     if rl_cfg is None:
-        rl_cfg = RlRunnerCfg(algorithm=cfg.algorithm)
+        rl_cfg = RlRunnerCfg(algorithm=cfg.algorithm, backend=cfg.backend)
         print_info(f"Using default RL configuration for {cfg.algorithm.upper()}")
     else:
         rl_cfg = copy.deepcopy(rl_cfg)
+        rl_cfg.backend = cfg.backend
         print_info(f"Using {cfg.algorithm.upper()} configuration")
 
     print_info(f"Loading checkpoint: {cfg.checkpoint}")
@@ -223,11 +226,11 @@ def run_play_rl(task: str, cfg: PlayRlConfig) -> int:
 def run_play_il(task: str, cfg: PlayIlConfig) -> int:
     """Run IL evaluation with the given configuration."""
     import torch
+    from luckyrobots import Session
 
     from luckylab.il import IlRunnerCfg, load_policy
     from luckylab.il.lerobot.wrapper import LeRobotEnvWrapper
     from luckylab.tasks import load_il_cfg
-    from luckyrobots import Session
 
     # Get IL config for eval connection info
     il_cfg = load_il_cfg(task, cfg.policy)
@@ -238,7 +241,7 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
     print_info(f"Connecting to LuckyEngine at {il_cfg.host}:{il_cfg.port}...")
     session = Session(host=il_cfg.host, port=il_cfg.port)
     session.connect(timeout_s=il_cfg.timeout_s, robot=il_cfg.robot)
-    print_info(f"Connected to LuckyEngine")
+    print_info("Connected to LuckyEngine")
 
     if session.engine_client is not None:
         session.engine_client.timeout = il_cfg.step_timeout_s
@@ -333,8 +336,8 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
     _report("loading", status="Loading policy and configuring environment")
 
     # Number of settle steps to run after reset before policy takes over.
-    # Matches the engine's RESET_SETTLE_STEPS (20 at 50Hz = 0.4s).
-    SETTLE_STEPS = 25
+    # Matches the engine's RESET_settle_steps (20 at 50Hz = 0.4s).
+    settle_steps = 25
     zero_action = np.zeros(action_dim, dtype=np.float32)
 
     try:
@@ -344,7 +347,7 @@ def run_play_il(task: str, cfg: PlayIlConfig) -> int:
 
             # Let the engine settle: send zero-actions so the robot reaches
             # a stable default pose before the policy starts driving.
-            for _ in range(SETTLE_STEPS):
+            for _ in range(settle_steps):
                 obs, _, _, _, _ = env.step(zero_action)
 
             steps = 0

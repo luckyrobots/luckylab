@@ -18,7 +18,6 @@ def UNITREE_GO2_ROUGH_ENV_CFG() -> ManagerBasedRlEnvCfg:  # noqa: N802
     cfg = create_velocity_env_cfg(
         robot="unitreego2",
         action_scale=GO2_ACTION_SCALE,
-        trunk_body_name="base",
     )
 
     return cfg

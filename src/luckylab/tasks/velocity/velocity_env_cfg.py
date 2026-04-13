@@ -24,14 +24,12 @@ from luckylab.utils.noise import UniformNoiseCfg as Unoise
 def create_velocity_env_cfg(
     robot: str,
     action_scale: float | dict[str, float],
-    trunk_body_name: str,
 ) -> ManagerBasedRlEnvCfg:
     """Create a velocity locomotion task configuration.
 
     Args:
         robot: Robot name (e.g., "unitreego2").
         action_scale: Scale factor for actions (float or dict of joint scales).
-        trunk_body_name: Name of the trunk/torso body for orientation rewards.
     Returns:
         Complete ManagerBasedRlEnvCfg for velocity task.
     """

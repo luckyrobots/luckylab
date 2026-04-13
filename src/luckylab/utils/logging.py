@@ -274,7 +274,7 @@ class WandbLogger:
 
         agent.write_tracking_data = _write
 
-    def __exit__(self, *exc):
+    def __exit__(self, *_exc):
         if not self.enabled:
             return
         if self._agent and self._original_write:

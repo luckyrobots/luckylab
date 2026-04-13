@@ -77,7 +77,12 @@ class LeRobotEnvWrapper(gymnasium.Env):
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         super().reset(seed=seed, options=options)
         obs_response = self.session.reset()
-        return self._parse_obs(obs_response), {}
+        # Pass through reset message from engine (contains episode eval results)
+        info: dict[str, Any] = {}
+        msg = getattr(self.session, "last_reset_message", "")
+        if msg and "episode_success=" in msg:
+            info["prev_episode_success"] = "True" in msg
+        return self._parse_obs(obs_response), info
 
     def step(
         self, action: np.ndarray,
