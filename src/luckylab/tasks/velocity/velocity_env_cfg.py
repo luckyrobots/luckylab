@@ -183,6 +183,65 @@ def create_velocity_env_cfg(
         vel_command_resampling_time_range=(5.0, 10.0),
     )
 
+    # Task contract for engine-side MDP computation.
+    # When set on ManagerBasedRlEnvCfg, the engine computes these reward signals
+    # and termination flags alongside observations, reducing Python overhead and
+    # enabling high-frequency signals (foot contact, slip) from MuJoCo data.
+    from luckylab.contracts.task_contract import (
+        ObservationContract,
+        ObservationTermRequest,
+        RewardContract,
+        RewardTermRequest,
+        TaskContract,
+        TerminationContract,
+        TerminationTermRequest,
+    )
+
+    task_contract = TaskContract(
+        task_id=f"{robot}_velocity_flat",
+        robot=robot,
+        scene="velocity",
+        observations=ObservationContract(
+            required=[
+                ObservationTermRequest("base_lin_vel"),
+                ObservationTermRequest("base_ang_vel"),
+                ObservationTermRequest("projected_gravity"),
+                ObservationTermRequest("joint_pos"),
+                ObservationTermRequest("joint_vel"),
+                ObservationTermRequest("vel_command"),
+                ObservationTermRequest("actions"),
+            ],
+            optional=[
+                ObservationTermRequest("foot_contact",
+                    params={"foot_geom_names": "FL_foot,FR_foot,RL_foot,RR_foot"}),
+                ObservationTermRequest("foot_heights",
+                    params={"foot_site_names": "FL_foot_site,FR_foot_site,RL_foot_site,RR_foot_site"}),
+            ],
+        ),
+        rewards=RewardContract(
+            engine_terms=[
+                RewardTermRequest("track_linear_velocity", weight=2.0, params={"scale": "3.0"}),
+                RewardTermRequest("track_angular_velocity", weight=1.5, params={"scale": "1.5"}),
+                RewardTermRequest("feet_air_time", weight=0.2, params={"target_air_time": "0.25"}),
+                RewardTermRequest("foot_slip_penalty", weight=-0.25),
+                RewardTermRequest("stand_still", weight=2.0),
+                RewardTermRequest("lin_vel_z_penalty", weight=-2.0),
+                RewardTermRequest("ang_vel_xy_penalty", weight=-0.05),
+                RewardTermRequest("orientation_error", weight=-1.0),
+                RewardTermRequest("action_rate", weight=-0.01),
+                RewardTermRequest("action_magnitude", weight=-0.01),
+            ],
+            python_terms=["foot_clearance"],  # Computed Python-side (needs CPG gait info)
+        ),
+        terminations=TerminationContract(
+            terms=[
+                TerminationTermRequest("time_out", is_timeout=True),
+                TerminationTermRequest("fell_over", params={"threshold": "-0.5"}),
+            ],
+        ),
+        max_episode_length_s=20.0,
+    )
+
     return ManagerBasedRlEnvCfg(
         robot=robot,
         scene="velocity",
@@ -193,6 +252,7 @@ def create_velocity_env_cfg(
         terminations=terminations,
         curriculum=curriculum,
         simulation_contract=contract,
+        task_contract=task_contract,
         sim_dt=0.005,
         decimation=4,
         episode_length_s=20.0,

@@ -1,6 +1,10 @@
 @echo off
 setlocal
 
+set ROOT_DIR=%~dp0..
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
+cd /d "%ROOT_DIR%"
+
 echo Checking for uv...
 where uv >nul 2>&1
 if %errorlevel% neq 0 (

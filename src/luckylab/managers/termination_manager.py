@@ -98,6 +98,32 @@ class TerminationManager(ManagerBase):
             self._term_dones[name][:] = value
         return self._truncated_buf | self._terminated_buf
     
+    def merge_engine_flags(
+        self, terminated: bool, truncated: bool,
+        termination_flags: dict[str, bool] | None = None,
+    ) -> None:
+        """Merge engine-computed termination flags into the manager state.
+
+        Called after compute() when a negotiated task contract is active.
+        Engine flags are OR'd with Python-computed flags so either source
+        can trigger an episode reset.
+
+        Args:
+            terminated: Engine-computed hard termination flag.
+            truncated: Engine-computed truncation (timeout) flag.
+            termination_flags: Per-condition flags from the engine (optional).
+        """
+        if terminated:
+            self._terminated_buf[:] = True
+        if truncated:
+            self._truncated_buf[:] = True
+
+        # Record per-condition flags for logging/diagnostics.
+        if termination_flags:
+            for name, fired in termination_flags.items():
+                if fired and name in self._term_dones:
+                    self._term_dones[name][:] = True
+
     def get_term(self, name: str) -> torch.Tensor:
         return self._term_dones[name]
     

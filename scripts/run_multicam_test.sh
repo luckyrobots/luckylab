@@ -5,8 +5,8 @@ set -euo pipefail
 # Auto-discovers all cameras in the scene and streams them simultaneously.
 # Usage: ./run_multicam_test.sh [host]
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
 
 HOST="${1:-127.0.0.1}"
 

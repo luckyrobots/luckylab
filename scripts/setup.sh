@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
+
 echo "Checking for uv..."
 if ! command -v uv &> /dev/null; then
     echo "uv not found. Installing uv..."

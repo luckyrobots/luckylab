@@ -2,10 +2,10 @@
 setlocal
 
 rem Resolve the directory this script lives in (the luckylab root)
-set SCRIPT_DIR=%~dp0
-if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+set ROOT_DIR=%~dp0..
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 
-cd /d "%SCRIPT_DIR%"
+cd /d "%ROOT_DIR%"
 
 echo Starting gRPC debug viewer (wiggle mode) ...
 uv run --no-sync --group il python grpc_debug_viewer.py --cameras Camera --width 256 --height 256 --wiggle

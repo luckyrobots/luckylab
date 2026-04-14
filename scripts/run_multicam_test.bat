@@ -5,10 +5,10 @@ rem Multi-camera stress test for gRPC camera streaming.
 rem Auto-discovers all cameras in the scene and streams them simultaneously.
 rem Usage: run_multicam_test.bat [host]
 
-set SCRIPT_DIR=%~dp0
-if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+set ROOT_DIR=%~dp0..
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 
-cd /d "%SCRIPT_DIR%"
+cd /d "%ROOT_DIR%"
 
 set HOST=%1
 if "%HOST%"=="" set HOST=127.0.0.1

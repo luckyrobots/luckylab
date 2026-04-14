@@ -8,18 +8,18 @@ ZIP_NAME="${DEMO_NAME}.zip"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${ZIP_NAME}"
 
 # Resolve the directory this script lives in (the luckylab root)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "Downloading demo from ${DOWNLOAD_URL} ..."
-curl -L "${DOWNLOAD_URL}" -o "${SCRIPT_DIR}/${ZIP_NAME}"
+curl -L "${DOWNLOAD_URL}" -o "${ROOT_DIR}/${ZIP_NAME}"
 
 echo "Extracting demo ..."
-unzip -o "${SCRIPT_DIR}/${ZIP_NAME}" -d "${SCRIPT_DIR}"
+unzip -o "${ROOT_DIR}/${ZIP_NAME}" -d "${ROOT_DIR}"
 
-chmod -R u+rwX "${SCRIPT_DIR}/runs"
-chmod +x "${SCRIPT_DIR}/run_demo.sh"
+chmod -R u+rwX "${ROOT_DIR}/runs"
+chmod +x "${ROOT_DIR}/run_demo.sh"
 
-rm "${SCRIPT_DIR}/${ZIP_NAME}"
+rm "${ROOT_DIR}/${ZIP_NAME}"
 
 echo ""
 echo "Demo installed successfully."

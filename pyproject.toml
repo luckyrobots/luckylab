@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "luckyrobots>=0.1.84",
+    "luckyrobots>=0.2.0",
     "gymnasium>=0.29.1",
     "numpy>=1.24.0",
     "prettytable>=3.10.0",
@@ -82,6 +82,7 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
+luckyrobots = { path = "../luckyrobots", editable = true }
 
 
 [tool.pytest.ini_options]

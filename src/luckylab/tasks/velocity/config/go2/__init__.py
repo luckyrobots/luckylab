@@ -13,4 +13,5 @@ register_task(
         "ppo": UNITREE_GO2_PPO_RUNNER_CFG,
         "sac": UNITREE_GO2_SAC_RUNNER_CFG,
     },
+    task_contract=getattr(UNITREE_GO2_FLAT_ENV_CFG, "task_contract", None),
 )

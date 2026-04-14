@@ -88,6 +88,25 @@ class RewardManager(ManagerBase):
             self._step_reward[:, term_idx] = value / dt
         return self._reward_buf
 
+    def merge_engine_rewards(self, engine_signals: dict[str, float], dt: float) -> None:
+        """Merge engine-computed reward signals into the reward buffer.
+
+        Engine signals are raw (unweighted) scalar values. They are added
+        directly to the reward buffer, scaled by dt to match the Python-side
+        convention (reward_buf accumulates dt-scaled rewards).
+
+        Args:
+            engine_signals: Dict mapping reward term name to scalar value.
+            dt: Timestep for scaling (same as passed to compute()).
+        """
+        for name, value in engine_signals.items():
+            self._reward_buf += value * dt
+
+    @property
+    def reward_buf(self) -> torch.Tensor:
+        """Current reward buffer (read after compute + merge)."""
+        return self._reward_buf
+
     def get_active_iterable_terms(self, env_idx):
         terms = []
         for idx, name in enumerate(self._term_names):

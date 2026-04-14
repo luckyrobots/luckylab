@@ -89,6 +89,12 @@ class ManagerBasedRlEnvCfg:
     nan_guard: NanGuardCfg = field(default_factory=NanGuardCfg)
     """NaN guard configuration for detecting and recovering from NaN/Inf during training."""
 
+    # Task contract (optional — enables engine-side reward/termination computation).
+    task_contract: Any = None
+    """Optional TaskContract for engine-side MDP computation. When set, the engine computes
+    reward signals and termination flags alongside observations, reducing Python overhead.
+    Import from luckylab.contracts to create one. None = use existing manager-only path."""
+
 
 class ManagerBasedRlEnv:
     """Manager-based RL environment for Session.
@@ -128,6 +134,11 @@ class ManagerBasedRlEnv:
         # Connect to Session.
         self.luckyrobots = Session(host=cfg.host, port=cfg.port)
         self._connect()
+
+        # Negotiate task contract if provided (engine-side reward/termination computation).
+        self._negotiated_session: dict | None = None
+        if cfg.task_contract is not None:
+            self._negotiate_contract(cfg.task_contract)
 
         # Get robot configuration.
         robot_config = Session.get_robot_config(cfg.robot)
@@ -279,6 +290,21 @@ class ManagerBasedRlEnv:
 
         self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
 
+        # Merge engine-computed signals when a negotiated contract is active.
+        if self._negotiated_session is not None:
+            if observation.reward_signals:
+                self.reward_manager.merge_engine_rewards(observation.reward_signals, dt=self.step_dt)
+                self.reward_buf = self.reward_manager.reward_buf
+
+            self.termination_manager.merge_engine_flags(
+                terminated=observation.terminated,
+                truncated=observation.truncated,
+                termination_flags=observation.termination_flags,
+            )
+            self.reset_terminated = self.termination_manager.terminated
+            self.reset_time_outs = self.termination_manager.time_outs
+            self.reset_buf = self.reset_terminated | self.reset_time_outs
+
         # Reset terminated envs so observations reflect the new episode's initial state.
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(reset_env_ids) > 0:
@@ -334,6 +360,27 @@ class ManagerBasedRlEnv:
         # Override the default 5s per-RPC timeout on the underlying gRPC client.
         if self.luckyrobots.engine_client is not None:
             self.luckyrobots.engine_client.timeout = self.cfg.step_timeout_s
+
+    def _negotiate_contract(self, task_contract) -> None:
+        """Negotiate a task contract with the engine for engine-side MDP computation.
+
+        When a contract is negotiated, the engine computes reward signals and
+        termination flags alongside observations each step, returning them in
+        the enriched StepResponse. This reduces Python overhead and enables
+        reward signals that depend on high-frequency MuJoCo data (contact
+        forces, foot slip, etc.) that aren't part of the observation vector.
+        """
+        if self.luckyrobots.engine_client is None:
+            raise RuntimeError("Engine client not connected — cannot negotiate contract")
+
+        from luckylab.contracts.negotiation import negotiate_task
+        result = negotiate_task(self.luckyrobots.engine_client, task_contract)
+        self._negotiated_session = result
+        print_info(
+            f"[ManagerBasedRlEnv] Contract negotiated: session={result.get('session_id', '?')}, "
+            f"engine rewards={result.get('reward_terms', [])}, "
+            f"engine terminations={result.get('termination_terms', [])}"
+        )
 
     def _fetch_observation_schema(self) -> None:
         """Fetch observation schema from engine."""
