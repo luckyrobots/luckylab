@@ -69,6 +69,7 @@ class ActionTermRequest:
     type: str  # "joint_position", "joint_velocity", "cpg"
     joint_pattern: str = "*"
     params: dict[str, Any] = field(default_factory=dict)
+    group: str = ""  # Action group name for multi-policy (e.g., "lower_body")
 
 
 @dataclass
@@ -170,12 +171,10 @@ class TaskContract:
         if self.observations:
             result["observations"] = {
                 "required": [
-                    {"name": t.name, "params": t.params, "group": t.group}
-                    for t in self.observations.required
+                    {"name": t.name, "params": t.params, "group": t.group} for t in self.observations.required
                 ],
                 "optional": [
-                    {"name": t.name, "params": t.params, "group": t.group}
-                    for t in self.observations.optional
+                    {"name": t.name, "params": t.params, "group": t.group} for t in self.observations.optional
                 ],
             }
 
@@ -214,6 +213,7 @@ class TaskContract:
                         "type": t.type,
                         "joint_pattern": t.joint_pattern,
                         "params": t.params,
+                        "group": t.group,
                     }
                     for t in self.actions.terms
                 ],
@@ -233,9 +233,6 @@ class TaskContract:
             }
 
         if self.auxiliary_data:
-            result["auxiliary_data"] = [
-                {"name": a.name, "params": a.params}
-                for a in self.auxiliary_data
-            ]
+            result["auxiliary_data"] = [{"name": a.name, "params": a.params} for a in self.auxiliary_data]
 
         return result
