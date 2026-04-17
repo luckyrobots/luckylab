@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 
 from luckyrobots import LuckyEngineClient
@@ -25,22 +26,14 @@ def main(args: list[str] | None = None) -> int:
         "task_id",
         help="Task ID to validate (must be registered in luckylab task registry).",
     )
-    parser.add_argument(
-        "--host", default="localhost", help="Engine gRPC host."
-    )
-    parser.add_argument(
-        "--port", type=int, default=50051, help="Engine gRPC port."
-    )
-    parser.add_argument(
-        "--timeout", type=float, default=10.0, help="Connection timeout."
-    )
+    parser.add_argument("--host", default="localhost", help="Engine gRPC host.")
+    parser.add_argument("--port", type=int, default=50051, help="Engine gRPC port.")
+    parser.add_argument("--timeout", type=float, default=10.0, help="Connection timeout.")
     parsed = parser.parse_args(args)
 
     # Import tasks to populate registry
-    try:
+    with contextlib.suppress(ImportError):
         import luckylab.tasks  # noqa: F401
-    except ImportError:
-        pass
 
     from luckylab.tasks.registry import load_env_cfg
 
@@ -50,6 +43,7 @@ def main(args: list[str] | None = None) -> int:
         print(f"ERROR: Task '{parsed.task_id}' not found in registry.", file=sys.stderr)
         print("Available tasks:", file=sys.stderr)
         from luckylab.tasks.registry import _REGISTRY
+
         for name in _REGISTRY:
             print(f"  - {name}", file=sys.stderr)
         return 1

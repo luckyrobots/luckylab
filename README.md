@@ -245,6 +245,33 @@ Set `task_contract` on `ManagerBasedRlEnvCfg` and the engine will compute those 
 
 ---
 
+## Advanced — engine-wide MuJoCo state
+
+LuckyLab's managers operate on an agent-scoped view of MuJoCo (the joints the
+registered `RobotAgent` has declared). If a task needs something outside that
+subset — for example, a privileged observation that reads finger positions the
+policy doesn't drive, or a debug overlay that visualises every joint — reach
+for the `MujocoSceneService` surface via the active session:
+
+```python
+env.luckyrobots.engine_client.get_model_info()          # every joint + actuator
+env.luckyrobots.engine_client.get_full_state().state    # full qpos / qvel / ctrl
+env.luckyrobots.engine_client.list_all_joints()         # lightweight dict view
+env.luckyrobots.engine_client.set_ctrl({"R_thumb_distal": 0.3})  # safety-gated
+```
+
+`set_ctrl` refuses any actuator that the live RL policy is driving (the engine
+tracks ownership via `ExternalAgentRegistry`), so a debug poke can't silently
+race your training loop — rejected actuator names come back in
+`response.rejected_actuators`.
+
+For runtime service discovery see `env.luckyrobots.engine_client.discover_services()`
+and `luckyrobots.reflection.describe_service`. See the
+[luckyrobots README](https://github.com/luckyrobots/luckyrobots) for the full
+client reference.
+
+---
+
 ## Available Tasks
 
 ```bash

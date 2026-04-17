@@ -22,8 +22,7 @@ class TaskContractError(Exception):
         warnings: List of validation warning dicts.
     """
 
-    def __init__(self, message: str, errors: list[dict] | None = None,
-                 warnings: list[dict] | None = None):
+    def __init__(self, message: str, errors: list[dict] | None = None, warnings: list[dict] | None = None):
         super().__init__(message)
         self.errors = errors or []
         self.warnings = warnings or []
@@ -34,15 +33,18 @@ class TaskContractError(Exception):
         if self.errors:
             lines.append("\nErrors:")
             for err in self.errors:
-                lines.append(f"  [{err.get('component', '?')}] {err.get('term_name', '?')}: "
-                             f"{err.get('message', '?')}")
+                lines.append(
+                    f"  [{err.get('component', '?')}] {err.get('term_name', '?')}: {err.get('message', '?')}"
+                )
                 if err.get("suggestion"):
                     lines.append(f"    Suggestion: {err['suggestion']}")
         if self.warnings:
             lines.append("\nWarnings:")
             for warn in self.warnings:
-                lines.append(f"  [{warn.get('component', '?')}] {warn.get('term_name', '?')}: "
-                             f"{warn.get('message', '?')}")
+                lines.append(
+                    f"  [{warn.get('component', '?')}] {warn.get('term_name', '?')}: "
+                    f"{warn.get('message', '?')}"
+                )
         return "\n".join(lines)
 
 

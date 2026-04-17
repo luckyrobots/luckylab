@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import torch
 from prettytable import PrettyTable
@@ -30,12 +31,8 @@ class TerminationManager(ManagerBase):
 
         self._term_dones = {}
         for term_name in self._term_names:
-            self._term_dones[term_name] = torch.zeros(
-                self.num_envs, device=self.device, dtype=torch.bool
-            )
-        self._truncated_buf = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.bool
-        )
+            self._term_dones[term_name] = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self._truncated_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._terminated_buf = torch.zeros_like(self._truncated_buf)
 
     def __str__(self) -> str:
@@ -44,14 +41,12 @@ class TerminationManager(ManagerBase):
         table.title = "Active Termination Terms"
         table.field_names = ["Index", "Name", "Time Out"]
         table.align["Name"] = "l"
-        for index, (name, term_cfg) in enumerate(
-            zip(self._term_names, self._term_cfgs, strict=False)
-        ):
+        for index, (name, term_cfg) in enumerate(zip(self._term_names, self._term_cfgs, strict=False)):
             table.add_row([index, name, term_cfg.time_out])
         msg += table.get_string()
         msg += "\n"
         return msg
-    
+
     # Properties.
 
     @property
@@ -69,19 +64,15 @@ class TerminationManager(ManagerBase):
     @property
     def terminated(self) -> torch.Tensor:
         return self._terminated_buf
-    
+
     # Methods.
 
-    def reset(
-        self, env_ids: torch.Tensor | slice | None = None
-    ) -> dict[str, torch.Tensor]:
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> dict[str, torch.Tensor]:
         if env_ids is None:
             env_ids = slice(None)
         extras = {}
         for key in self._term_dones:
-            extras["Episode_Termination/" + key] = torch.count_nonzero(
-                self._term_dones[key][env_ids]
-            ).item()
+            extras["Episode_Termination/" + key] = torch.count_nonzero(self._term_dones[key][env_ids]).item()
         for term_cfg in self._class_term_cfgs:
             term_cfg.func.reset(env_ids=env_ids)
         return extras
@@ -97,9 +88,11 @@ class TerminationManager(ManagerBase):
                 self._terminated_buf |= value
             self._term_dones[name][:] = value
         return self._truncated_buf | self._terminated_buf
-    
+
     def merge_engine_flags(
-        self, terminated: bool, truncated: bool,
+        self,
+        terminated: bool,
+        truncated: bool,
         termination_flags: dict[str, bool] | None = None,
     ) -> None:
         """Merge engine-computed termination flags into the manager state.
@@ -126,10 +119,8 @@ class TerminationManager(ManagerBase):
 
     def get_term(self, name: str) -> torch.Tensor:
         return self._term_dones[name]
-    
-    def get_active_iterable_terms(
-        self, env_idx: int
-    ) -> Sequence[tuple[str, Sequence[float]]]:
+
+    def get_active_iterable_terms(self, env_idx: int) -> Sequence[tuple[str, Sequence[float]]]:
         terms = []
         for key in self._term_dones:
             terms.append((key, [self._term_dones[key][env_idx].float().cpu().item()]))

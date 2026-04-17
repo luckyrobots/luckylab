@@ -153,31 +153,16 @@ def main(args: list[str] | None = None) -> int:
         prog="luckylab diff-capabilities",
         description="Compare capability manifests between engine versions.",
     )
+    parser.add_argument("--old", help="Path to older manifest JSON file.")
+    parser.add_argument("--new", help="Path to newer manifest JSON file.")
     parser.add_argument(
-        "--old", help="Path to older manifest JSON file."
+        "--live", action="store_true", help="Use live engine as the 'new' manifest (requires --old)."
     )
-    parser.add_argument(
-        "--new", help="Path to newer manifest JSON file."
-    )
-    parser.add_argument(
-        "--live", action="store_true",
-        help="Use live engine as the 'new' manifest (requires --old)."
-    )
-    parser.add_argument(
-        "--save", help="Save current live manifest to a JSON file and exit."
-    )
-    parser.add_argument(
-        "--robot", default="", help="Robot name filter."
-    )
-    parser.add_argument(
-        "--host", default="localhost", help="Engine gRPC host."
-    )
-    parser.add_argument(
-        "--port", type=int, default=50051, help="Engine gRPC port."
-    )
-    parser.add_argument(
-        "--timeout", type=float, default=10.0, help="Connection timeout."
-    )
+    parser.add_argument("--save", help="Save current live manifest to a JSON file and exit.")
+    parser.add_argument("--robot", default="", help="Robot name filter.")
+    parser.add_argument("--host", default="localhost", help="Engine gRPC host.")
+    parser.add_argument("--port", type=int, default=50051, help="Engine gRPC port.")
+    parser.add_argument("--timeout", type=float, default=10.0, help="Connection timeout.")
     parsed = parser.parse_args(args)
 
     # Mode: save manifest

@@ -98,7 +98,7 @@ def load_env_cfg(task_id: str) -> object:
     return env_cfg
 
 
-def load_rl_cfg(task_id: str, algorithm: str) -> "RlRunnerCfg | None":
+def load_rl_cfg(task_id: str, algorithm: str) -> RlRunnerCfg | None:
     """
     Load the RL training configuration for a task and algorithm.
 
@@ -119,7 +119,7 @@ def load_rl_cfg(task_id: str, algorithm: str) -> "RlRunnerCfg | None":
     return _REGISTRY[task_id].rl_cfgs.get(algorithm)
 
 
-def load_il_cfg(task_id: str, policy_type: str) -> "IlRunnerCfg | None":
+def load_il_cfg(task_id: str, policy_type: str) -> IlRunnerCfg | None:
     """
     Load the IL training configuration for a task and policy type.
 
@@ -140,7 +140,7 @@ def load_il_cfg(task_id: str, policy_type: str) -> "IlRunnerCfg | None":
     return _REGISTRY[task_id].il_cfgs.get(policy_type)
 
 
-def load_task_contract(task_id: str) -> "TaskContract | None":
+def load_task_contract(task_id: str) -> TaskContract | None:
     """Load the TaskContract for a task, if one was registered.
 
     Args:

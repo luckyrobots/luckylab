@@ -42,7 +42,7 @@ class ManagerBasedRlEnvCfg:
     Combines base environment settings with RL-specific configuration
     (rewards, terminations, curriculum, simulation contract).
     """
-    
+
     decimation: int
     """Number of simulation steps per environment step."""
     observations: dict[str, ObservationGroupCfg]
@@ -105,12 +105,7 @@ class ManagerBasedRlEnv:
 
     cfg: ManagerBasedRlEnvCfg
 
-    def __init__(
-            self, 
-            cfg: ManagerBasedRlEnvCfg, 
-            device: str = "cpu",
-            **kwargs: Any
-        ) -> None:
+    def __init__(self, cfg: ManagerBasedRlEnvCfg, device: str = "cpu", **kwargs: Any) -> None:
         """Initialize the environment.
 
         Args:
@@ -127,9 +122,7 @@ class ManagerBasedRlEnv:
 
         # Initialize RL-specific state.
         self.common_step_counter = 0
-        self.episode_length_buf = torch.zeros(
-            self._num_envs, dtype=torch.long, device=self._device
-        )
+        self.episode_length_buf = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
 
         # Connect to Session.
         self.luckyrobots = Session(host=cfg.host, port=cfg.port)
@@ -163,12 +156,12 @@ class ManagerBasedRlEnv:
     def num_envs(self) -> int:
         """Number of parallel environments."""
         return self._num_envs
-    
+
     @property
     def physics_dt(self) -> float:
         """Physics simulation step size."""
         return self.cfg.sim_dt
-    
+
     @property
     def step_dt(self) -> float:
         """Environment step size (physics_dt * decimation)."""
@@ -183,14 +176,14 @@ class ManagerBasedRlEnv:
     def max_episode_length_s(self) -> float:
         """Maximum episode length in seconds."""
         return self.cfg.episode_length_s
-    
+
     @property
     def max_episode_length(self) -> int:
         """Maximum episode length in steps."""
         return math.ceil(self.max_episode_length_s / self.step_dt)
 
     @property
-    def unwrapped(self) -> "ManagerBasedRlEnv":
+    def unwrapped(self) -> ManagerBasedRlEnv:
         """Return the unwrapped environment."""
         return self
 
@@ -322,7 +315,7 @@ class ManagerBasedRlEnv:
             self.reset_time_outs,
             self.extras,
         )
-    
+
     def render(self) -> torch.Tensor | None:
         """Render the environment."""
         return None
@@ -374,6 +367,7 @@ class ManagerBasedRlEnv:
             raise RuntimeError("Engine client not connected — cannot negotiate contract")
 
         from luckylab.contracts.negotiation import negotiate_task
+
         result = negotiate_task(self.luckyrobots.engine_client, task_contract)
         self._negotiated_session = result
         print_info(
@@ -398,7 +392,7 @@ class ManagerBasedRlEnv:
         """Initialize scene with robot entity."""
         action_limits = robot_config["action_space"]["actuator_limits"]
         joint_names = [limit.get("name", f"joint_{i}") for i, limit in enumerate(action_limits)]
-        
+
         self.scene = Scene()
         robot = Entity(
             cfg=EntityCfg(),
@@ -434,22 +428,20 @@ class ManagerBasedRlEnv:
                 )
             else:
                 # Non-concatenated group: nested DictSpace with per-term boxes.
-                assert not isinstance(group_dim, tuple), f"Expected list for non-concatenated group {group_name}"
+                assert not isinstance(group_dim, tuple), (
+                    f"Expected list for non-concatenated group {group_name}"
+                )
                 group_term_cfgs = self.observation_manager._group_obs_term_cfgs[group_name]
                 group_space = DictSpace()
                 for term_name, term_dim, _term_cfg in zip(
                     group_term_names, group_dim, group_term_cfgs, strict=False
                 ):
-                    group_space.spaces[term_name] = Box(
-                        low=-np.inf, high=np.inf, shape=term_dim
-                    )
+                    group_space.spaces[term_name] = Box(low=-np.inf, high=np.inf, shape=term_dim)
                 self.single_observation_space.spaces[group_name] = group_space
 
         # Action space.
         action_dim = sum(self.action_manager.action_term_dim)
-        self.single_action_space = Box(
-            low=-np.inf, high=np.inf, shape=(action_dim,)
-        )
+        self.single_action_space = Box(low=-np.inf, high=np.inf, shape=(action_dim,))
 
         # Batched spaces.
         self.observation_space = batch_space(self.single_observation_space, self._num_envs)

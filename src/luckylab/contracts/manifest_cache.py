@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +101,10 @@ class ManifestCache:
         """
         lines = []
 
-        lines.append(f"Engine: {manifest.get('engine_version', '?')} "
-                      f"(manifest v{manifest.get('manifest_version', '?')})")
+        lines.append(
+            f"Engine: {manifest.get('engine_version', '?')} "
+            f"(manifest v{manifest.get('manifest_version', '?')})"
+        )
         lines.append("")
 
         for category in ["observations", "rewards", "terminations"]:

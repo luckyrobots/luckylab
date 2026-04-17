@@ -28,18 +28,10 @@ def main(args: list[str] | None = None) -> int:
     parser.add_argument(
         "--robot", default="", help="Filter by robot name (e.g., unitreego2). Empty = show all."
     )
-    parser.add_argument(
-        "--scene", default="", help="Filter by scene name. Empty = show all."
-    )
-    parser.add_argument(
-        "--host", default="localhost", help="Engine gRPC host (default: localhost)."
-    )
-    parser.add_argument(
-        "--port", type=int, default=50051, help="Engine gRPC port (default: 50051)."
-    )
-    parser.add_argument(
-        "--timeout", type=float, default=10.0, help="Connection timeout in seconds."
-    )
+    parser.add_argument("--scene", default="", help="Filter by scene name. Empty = show all.")
+    parser.add_argument("--host", default="localhost", help="Engine gRPC host (default: localhost).")
+    parser.add_argument("--port", type=int, default=50051, help="Engine gRPC port (default: 50051).")
+    parser.add_argument("--timeout", type=float, default=10.0, help="Connection timeout in seconds.")
     parsed = parser.parse_args(args)
 
     print(f"Connecting to LuckyEngine at {parsed.host}:{parsed.port}...")
@@ -64,7 +56,7 @@ def main(args: list[str] | None = None) -> int:
         robot_info = manifest.get("robot_info")
         if robot_info:
             print(f"{'=' * 60}")
-            print(f"  ROBOT INFO")
+            print("  ROBOT INFO")
             print(f"{'=' * 60}")
             print(f"  Name: {robot_info.get('name', '?')}")
             joints = robot_info.get("joint_names", [])
@@ -76,8 +68,10 @@ def main(args: list[str] | None = None) -> int:
         rew_count = len(manifest.get("rewards", []))
         term_count = len(manifest.get("terminations", []))
         rand_count = len(manifest.get("randomizations", []))
-        print(f"\nTotal: {obs_count} observations, {rew_count} rewards, "
-              f"{term_count} terminations, {rand_count} randomizations")
+        print(
+            f"\nTotal: {obs_count} observations, {rew_count} rewards, "
+            f"{term_count} terminations, {rand_count} randomizations"
+        )
 
     except Exception as e:
         print(f"ERROR: Failed to fetch manifest: {e}", file=sys.stderr)

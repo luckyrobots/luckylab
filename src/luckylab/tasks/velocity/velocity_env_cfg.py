@@ -155,9 +155,19 @@ def create_velocity_env_cfg(
                     # Phase 2 (500k-1M): Add yaw turning
                     {"step": 500_000, "lin_vel_x": (-0.8, 0.8), "ang_vel_z": (-0.5, 0.5)},
                     # Phase 3 (1M-1.5M): Add lateral movement
-                    {"step": 1_000_000, "lin_vel_x": (-0.8, 0.8), "lin_vel_y": (-0.3, 0.3), "ang_vel_z": (-0.8, 0.8)},
+                    {
+                        "step": 1_000_000,
+                        "lin_vel_x": (-0.8, 0.8),
+                        "lin_vel_y": (-0.3, 0.3),
+                        "ang_vel_z": (-0.8, 0.8),
+                    },
                     # Phase 4 (1.5M+): Full range
-                    {"step": 1_500_000, "lin_vel_x": (-1.0, 1.0), "lin_vel_y": (-0.6, 0.6), "ang_vel_z": (-1.0, 1.0)},
+                    {
+                        "step": 1_500_000,
+                        "lin_vel_x": (-1.0, 1.0),
+                        "lin_vel_y": (-0.6, 0.6),
+                        "ang_vel_z": (-1.0, 1.0),
+                    },
                 ],
             },
         ),
@@ -212,10 +222,13 @@ def create_velocity_env_cfg(
                 ObservationTermRequest("actions"),
             ],
             optional=[
-                ObservationTermRequest("foot_contact",
-                    params={"foot_geom_names": "FL_foot,FR_foot,RL_foot,RR_foot"}),
-                ObservationTermRequest("foot_heights",
-                    params={"foot_site_names": "FL_foot_site,FR_foot_site,RL_foot_site,RR_foot_site"}),
+                ObservationTermRequest(
+                    "foot_contact", params={"foot_geom_names": "FL_foot,FR_foot,RL_foot,RR_foot"}
+                ),
+                ObservationTermRequest(
+                    "foot_heights",
+                    params={"foot_site_names": "FL_foot_site,FR_foot_site,RL_foot_site,RR_foot_site"},
+                ),
             ],
         ),
         rewards=RewardContract(
