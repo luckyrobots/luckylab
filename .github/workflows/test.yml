@@ -43,7 +43,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --extra cpu --all-groups
+        run: uv sync --extra cpu --extra all --group dev
 
       - name: Run tests
         run: uv run pytest tests -v --cov=src/luckylab --cov-report=xml --durations=10

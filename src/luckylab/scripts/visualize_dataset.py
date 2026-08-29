@@ -52,8 +52,7 @@ def main() -> int:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
     except ImportError:
         print_info(
-            "lerobot is required for dataset visualization. "
-            "Install with: uv sync --group il",
+            "lerobot is required for dataset visualization. Install with: uv sync --extra il",
             color="red",
         )
         return 1
