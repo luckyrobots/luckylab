@@ -27,12 +27,41 @@ dependencies = [
     "gymnasium>=0.29.1",
     "numpy>=1.24.0",
     "prettytable>=3.10.0",
-    "torch>=2.0.0",
     "tqdm>=4.64.0",
     "rich>=13.0.0",
     "tensorboard>=2.15.0",
     "tyro>=0.8.0",
     "wandb>=0.24.1",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "torch>=2.0.0",
+]
+cu128 = [
+    "torch>=2.0.0",
+]
+cu130 = [
+    "torch>=2.0.0",
+]
+rl = [
+    "skrl>=1.3.0,<2.0.0",
+    "stable-baselines3>=2.0.0",
+]
+il = [
+    "lerobot>=0.4.3",
+]
+viewer = [
+    "mujoco>=3.0.0",
+    "viser>=0.2.0",
+    "trimesh>=4.0.0",
+    "pillow>=10.0.0",
+]
+rerun = [
+    "rerun-sdk>=0.23.0",
+]
+all = [
+    "luckylab[rl,il,viewer,rerun]",
 ]
 
 [project.urls]
@@ -44,19 +73,6 @@ Issues = "https://github.com/luckyrobots/luckylab/issues"
 packages = ["src/luckylab"]
 
 [dependency-groups]
-rl = [
-    "skrl>=1.3.0,<2.0.0",
-    "stable-baselines3>=2.0.0",
-    {include-group = "viewer"},
-]
-il = [
-    "lerobot>=0.4.3",
-]
-all = [
-    {include-group = "rl"},
-    {include-group = "il"},
-    {include-group = "rerun"},
-]
 dev = [
     "pre-commit>=3.7.0",
     "debugpy>=1.8.1",
@@ -65,23 +81,37 @@ dev = [
     "ruff>=0.9.0",
     "pyright>=1.1.390",
 ]
-viewer = [
-    "mujoco>=3.0.0",
-    "viser>=0.2.0",
-    "trimesh>=4.0.0",
-    "pillow>=10.0.0",
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu128" },
+        { extra = "cu130" },
+    ],
 ]
-rerun = [
-    "rerun-sdk>=0.23.0",
-]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu128", extra = "cu128" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
 
 
 [tool.pytest.ini_options]

@@ -20,7 +20,7 @@ Thank you for your interest in contributing to LuckyLab! This document provides 
 
 2. **Install dependencies with uv**
    ```bash
-   uv sync --all-groups
+   uv sync --extra all --group dev
    ```
 
 3. **Install pre-commit hooks**

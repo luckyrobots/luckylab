@@ -34,18 +34,21 @@ LuckyLab uses [uv](https://docs.astral.sh/uv/) for dependency management. Instal
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Then install the dependency group for your use case:
+Then install the optional dependencies for your use case:
 
 ```bash
 # RL only
-uv sync --group rl
+uv sync --extra rl
 
 # IL only (LeRobot)
-uv sync --group il
+uv sync --extra il
 
-# Everything (RL + IL + Rerun + dev tools)
-uv sync --all-groups
+# Everything (RL + IL + viewer + Rerun + dev tools)
+uv sync --extra all --group dev
 ```
+
+Other projects can select the same capabilities through standard package extras,
+for example `luckylab[cpu,rl]`, `luckylab[cpu,il]`, or `luckylab[cpu,all]`.
 
 ### 2. Start LuckyEngine
 
@@ -158,7 +161,7 @@ uv run python -m luckylab.scripts.play go2_velocity_flat \
 ## Development
 
 ```bash
-uv sync --all-groups
+uv sync --extra all --group dev
 uv run pre-commit install
 
 uv run pytest tests -v
